@@ -1,0 +1,9 @@
+version: v2.12.2
+
+name: custom-gcl
+destination: ./bin
+
+plugins:
+  - module: 'github.com/zcayou/go-tools'
+    import: 'github.com/zcayou/go-tools/golangci'
+    path: .

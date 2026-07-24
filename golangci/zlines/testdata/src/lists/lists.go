@@ -1,0 +1,30 @@
+package lists
+
+// A marker at the margin opens a sentence rather than a list item: go/doc reads
+// a list only where the marker is still indented once the space every prose
+// line carries has come off it.
+
+// want +2 `comment-wrap: .* over 3 lines; .* takes 2`
+
+// a paragraph whose middle line opens with a dash
+// - which is prose, not a list item
+// and joins the lines around it
+type unindented struct{}
+
+// An indented list keeps its shape, each item filling inside its own marker:
+//
+// want +2 `comment-wrap: .* over 2 lines; .* takes 1`
+//
+//   - an item whose text is wrapped
+//     short of the limit
+//   - a second item, short enough to stand as it is
+type bulleted struct{}
+
+// A number opens an item on the same terms, inside the marker it carries:
+//
+// want +2 `comment-wrap: .* over 2 lines; .* takes 1`
+//
+//  1. a numbered item whose text is
+//     wrapped short of the limit
+//  2. a second item, short enough to stand as it is
+type numbered struct{}

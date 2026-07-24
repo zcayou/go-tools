@@ -34,8 +34,5 @@ secrets/
 tmp/
 .tmp/
 
-# Private/local
-.private/
-.archive/
-.design/
-TODO*
+# Local reference material
+.dev/

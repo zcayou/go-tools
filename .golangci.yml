@@ -1,0 +1,203 @@
+version: "2"
+
+run:
+  go: "1.26"
+  timeout: 10m
+  relative-path-mode: gomod
+  modules-download-mode: readonly
+  allow-parallel-runners: true
+
+linters:
+  default: none
+  enable:
+    - asasalint
+    - asciicheck
+    - bidichk
+    - depguard
+    - dogsled
+    - dupl
+    - errcheck
+    - errchkjson
+    - errorlint
+    - exhaustive
+    - ginkgolinter
+    - gocritic
+    - gocyclo
+    - gosec
+    - govet
+    - iface
+    - ineffassign
+    - iotamixing
+    - makezero
+    - misspell
+    - modernize
+    - nakedret
+    - nilerr
+    - nolintlint
+    - prealloc
+    - revive
+    - sloglint
+    - staticcheck
+    - unconvert
+    - unparam
+    - unused
+    - deadcode
+    - testlayout
+    - zlines
+
+  settings:
+    custom:
+      testlayout:
+        type: module
+        description: Checks that test files follow the repository's test-suite layout conventions.
+        original-url: github.com/zcayou/go-tools
+        settings:
+          # Black-box remains the rule; the one whitebox file allowed is a
+          # spec-less export_test.go bridging package internals to the specs.
+          whitebox:
+            allowed: true
+            patterns: []
+            helper-patterns: [export_test.go]
+      deadcode:
+        type: module
+        description: Reports code that nothing in the program can reach.
+        original-url: github.com/zcayou/go-tools
+        settings:
+          api: ['./golangci/...']
+      zlines:
+        type: module
+        description: Reports line breaks the line-length limit does not call for.
+        original-url: github.com/zcayou/go-tools
+
+    depguard:
+      rules:
+        main:
+          deny:
+            - pkg: github.com/pkg/errors
+              desc: Use standard library errors/fmt instead.
+
+    errcheck:
+      check-type-assertions: true
+
+    exhaustive:
+      default-signifies-exhaustive: true
+      ignore-enum-types: 'token\.Token'
+
+    gocyclo:
+      min-complexity: 20
+
+    gosec:
+      excludes:
+        - G104
+
+    govet:
+      enable:
+        - shadow
+
+    iface:
+      enable:
+        - identical
+        - opaque
+        - unexported
+
+    misspell:
+      locale: US
+
+    modernize:
+      disable:
+        - omitzero
+
+    nolintlint:
+      allow-unused: false
+      require-explanation: true
+      require-specific: true
+
+    revive:
+      rules:
+        - name: blank-imports
+        - name: comment-spacings
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: error-naming
+        - name: error-return
+        - name: error-strings
+        - name: errorf
+        - name: if-return
+        - name: indent-error-flow
+        - name: import-shadowing
+        - name: increment-decrement
+        - name: range
+        - name: receiver-naming
+        - name: redefines-builtin-id
+        - name: superfluous-else
+        - name: time-naming
+        - name: unexported-return
+        - name: unreachable-code
+        - name: var-declaration
+        - name: var-naming
+
+    sloglint:
+      no-mixed-args: true
+      attr-only: true
+      static-msg: true
+      context: scope
+      key-naming-case: snake
+
+    staticcheck:
+      checks: ["all"]
+      dot-import-whitelist:
+        - github.com/onsi/ginkgo/v2
+        - github.com/onsi/gomega
+
+    unused:
+      generated-is-used: true
+      exported-fields-are-used: false
+      local-variables-are-used: false
+
+  exclusions:
+    generated: strict
+    rules:
+      # Ginkgo specs repeat their setup and assertion shapes by nature.
+      - linters:
+          - dupl
+        path: _test\.go$
+      # These assertions rest on a shape their own package guarantees — go/ast's
+      # node kinds, and the *typeutil.Map every value in byOperand is written as
+      # — so a failed assertion is a broken invariant that should panic rather
+      # than a checked error the caller could act on.
+      - linters:
+          - errcheck
+        source: '\.\(\*(ast|typeutil)\.'
+      # Ginkgo DeferCleanup(cancel) is the canonical cancel-call pattern; gosec G118 can't detect it.
+      - linters:
+          - gosec
+        text: "G118"
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  uniq-by-line: false
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+    - gci
+  settings:
+    gofmt:
+      rewrite-rules:
+        - pattern: interface{}
+          replacement: any
+    gci:
+      sections:
+        - standard
+        - default
+        - localmodule
+
+output:
+  formats:
+    text:
+      path: stdout
+      print-issued-lines: true
+      print-linter-name: true
+      colors: true

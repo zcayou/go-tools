@@ -1,0 +1,98 @@
+package comments
+
+// Each want comment sits alone: two side by side would be a paragraph to fill.
+
+// want +2 `comment-wrap: .* over 3 lines; .* takes 1`
+
+// this is a
+// short comment
+// blah
+type collapsible struct{}
+
+// want +4 `comment-wrap: .* over 2 lines; .* takes 1`
+
+// want +5 `comment-wrap: .* over 2 lines; .* takes 1`
+
+// this is a
+// short comment
+//
+// blah
+// blah2
+type separated struct{}
+
+// want +3 `comment-wrap: .* over 2 lines; .* takes 1`
+
+type thing struct {
+	// short
+	// comment
+	field string
+
+	// want +2 `comment-wrap: .* over 3 lines; .* takes 2`
+
+	// a field comment written over three short lines whose words
+	// still need two lines once they are filled to the
+	// limit
+	name string
+}
+
+// want +2 `comment-wrap: .* over 3 lines; .* takes 2`
+
+// this paragraph is written over three
+// short lines but its words fill only two
+// lines at the limit
+func refilled() {}
+
+// A heading, a code block and a link definition keep the shape gofmt gave them.
+// Consecutive lines of a shape are what the shapes have to be read for: alone
+// between blank lines each would fill to itself and say nothing.
+//
+// # A heading
+//
+// An indented block:
+//
+//	code := notProse
+//	more := alsoNotProse
+//
+// [analysis.Analyzer]: https://example.com/pkg
+// [register.LoadModeSyntax]: https://example.com/register
+func documented() {}
+
+// A list item fills inside the marker it was written with, on its own: the item
+// above is no more part of it than the sentence above the list.
+//
+// want +2 `comment-wrap: .* over 2 lines; .* takes 1`
+//
+//   - an item whose text is wrapped
+//     well short of the limit
+//   - a second item, short enough to stand as it is
+//
+// The second item draws nothing, which is what says the items are runs of their
+// own: were they one, the first would have pulled the second up into it.
+func filledList() {}
+
+//go:noinline
+func directived() {}
+
+// A quoted directive is left where it was put, and so is the paragraph carrying
+// it: golangci-lint trims the slashes off before it looks, so filling this onto
+// a line of its own would make it a live //nolint:zlines and silence the
+// declaration below.
+func quotedDirective() {}
+
+//	if err != nil {
+//		return err
+//	}
+func commentedOut() {}
+
+func trailing() {
+	x := 1 // a trailing comment says something about the code beside it
+	_ = x
+}
+
+// Greedy alone would close the first line below on "the", at 77 columns.
+
+// want +2 `comment-wrap: comment is wrapped short of the 80-column limit`
+
+// Centralizing the checks keeps them consistent
+// across tiers and absorbs the variation in the output shapes.
+func dangled() {}

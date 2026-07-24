@@ -1,0 +1,2 @@
+A file that is not Go is not a source file, so <source> never resolves against
+this name.

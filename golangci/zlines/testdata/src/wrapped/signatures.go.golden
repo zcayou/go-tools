@@ -1,0 +1,57 @@
+package wrapped
+
+import "context"
+
+type ref[R any] struct{}
+
+type value struct{}
+
+// Each want comment sits on the line above the signature it is about: inside
+// the signature a line comment would keep the wrap instead of reporting it.
+
+// want +1 `signature-wrap: params: signature is wrapped but fits on one 43-column line \(limit 120\)`
+func params(count int, name string) error {
+	return nil
+}
+
+// want +1 `signature-wrap: declareHostBinding: signature is wrapped but fits on one 78-column line \(limit 120\)`
+func declareHostBinding[R any](reference ref[R], bound value) (value, error) {
+	return value{}, nil
+}
+
+// want +1 `signature-wrap: method: signature is wrapped but fits on one 90-column line \(limit 120\)`
+func (r *ref[R]) method(ctx context.Context, opts ...string) (out <-chan int, err error) {
+	return nil, nil
+}
+
+// want +1 `signature-wrap: closerOnLastParamLine: signature is wrapped but fits on one 58-column line \(limit 120\)`
+func closerOnLastParamLine(count int, name string) error {
+	return nil
+}
+
+// The body draws a diagnostic of its own, on the line the signature ends on;
+// the two fixes have to land side by side without treading on each other. The
+// width is of the line the two of them leave, which is the signature and the
+// brace: counting the body in would make the fix report something new on
+// the second run.
+
+// want +2 `signature-wrap: oneLineBody: signature is wrapped but fits on one 33-column line \(limit 120\)`
+// want +3 `body-collapse: oneLineBody: body is written on the signature line rather than lines of its own`
+func oneLineBody(count int) int {
+	return count
+}
+
+// want +1 `signature-wrap: trailingComment: signature is wrapped but fits on one 46-column line \(limit 120\)`
+func trailingComment(count int) error { // why
+	return nil
+}
+
+// want +1 `signature-wrap: oneFieldStruct: signature is wrapped but fits on one 50-column line \(limit 120\)`
+func oneFieldStruct(s struct{ Count int }) error {
+	return nil
+}
+
+// want +1 `signature-wrap: blockComment: signature is wrapped but fits on one 52-column line \(limit 120\)`
+func blockComment(count int /* the count */) error {
+	return nil
+}

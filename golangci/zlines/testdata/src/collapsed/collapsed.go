@@ -1,0 +1,43 @@
+package collapsed
+
+type kind int
+
+type report struct {
+	demand kind
+}
+
+func first()  {}
+func second() {}
+
+func run(fn func() error) error {
+	return fn()
+}
+
+// Each want comment sits on the line above the declaration it is about, so that
+// nothing is added to the line the fix rewrites.
+
+// want +1 `body-collapse: Demand: body is written on the signature line rather than lines of its own`
+func (r report) Demand() kind { return r.demand }
+
+// want +1 `body-collapse: several: body is written on the signature line rather than lines of its own`
+func several() { first(); second() }
+
+// want +1 `body-collapse: commented: body is written on the signature line rather than lines of its own`
+func commented() int { return 1 /* the answer */ }
+
+// A body declaring no statements is not collapsed onto anything.
+func empty() {}
+
+func commentOnly() { /* nothing to do */ }
+
+// A bare semicolon is a statement to the parser and nothing to a reader, so
+// there is no line of its own for it to go on.
+func semicolonOnly() { ; }
+
+// A function literal is not a declaration, and one line is often where it reads
+// best.
+var _ = run(func() error { return nil })
+
+func expanded() kind {
+	return kind(0)
+}

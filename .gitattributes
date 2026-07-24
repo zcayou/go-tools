@@ -1,0 +1,7 @@
+# Never add export-ignore: git archive publishes the module zip, so ignored paths vanish from it.
+
+* text=auto eol=lf
+
+# analysistest compares fixture and golden bytes, so a checkout that converted
+# line endings would fail the suites rather than report a real diagnostic.
+**/testdata/** text eol=lf
