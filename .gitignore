@@ -1,0 +1,41 @@
+# Build output
+bin/
+dist/
+
+# Test artifacts
+*.test
+
+# Go workspace
+go.work
+go.work.sum
+
+# Dependencies
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+
+# Environment and secrets
+.env
+.env.local
+secrets/
+
+# Shell history (devcontainers)
+.zsh_history
+
+# Temporary files
+tmp/
+.tmp/
+
+# Private/local
+.private/
+.archive/
+.design/
+TODO*
