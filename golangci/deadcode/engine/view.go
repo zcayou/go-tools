@@ -11,13 +11,16 @@ import (
 
 // A view is the evidence policy one evaluation runs under. The full view admits
 // every fact the loaded program holds. The masked view removes test-origin
-// evidence — facts positioned in _test.go files, and the packages that exist
-// only because of tests — so its verdicts answer whether the program needs
-// a declaration with no test vouching for it. The program itself is shared:
-// masking holds the loaded set constant, so the two evaluations differ
-// in exactly one variable.
+// evidence — facts positioned in _test.go files, the packages that exist only
+// because of tests, and the packages declared test-facing — so its verdicts
+// answer whether the program needs a declaration with no test vouching for it.
+// The program itself is shared: masking holds the loaded set constant, so
+// the two evaluations differ in exactly one variable.
 type view struct {
 	masked bool
+	// testFacing is the declared test-facing set, packages whose facts
+	// are test-origin by declaration. Only the masked view consults it.
+	testFacing map[string]bool
 }
 
 // admitsFile reports whether facts read from the named file count as evidence.
@@ -25,11 +28,20 @@ func (v view) admitsFile(name string) bool {
 	return !v.masked || !testFile(name)
 }
 
-// admitsPackage reports whether the package's facts count as evidence. Only
-// the synthesized test main needs a path check: its generated file is not named
-// like a test file, while every other test-variant file is.
+// admitsPackage reports whether the package's facts count as evidence.
+// The synthesized test main needs the suffix check — its generated file is not
+// named like a test file, while every other test-variant file is —
+// and a declared test-facing package is test origin by its path alone.
 func (v view) admitsPackage(path string) bool {
-	return !v.masked || !strings.HasSuffix(path, ".test")
+	return !v.masked || (!strings.HasSuffix(path, ".test") && !v.testFacing[path])
+}
+
+// admitsRoots reports whether the package may contribute call-graph roots.
+// Under the masked view neither a test variant nor a declared test-facing
+// package roots anything: what only they reach is exactly what the mask exists
+// to expose.
+func (v view) admitsRoots(pkg *packages.Package) bool {
+	return !v.masked || (!testVariant(pkg) && !v.testFacing[pkg.PkgPath])
 }
 
 // admitsInstruction reports whether an instruction of fn counts as evidence.

@@ -77,6 +77,15 @@
 // carries its verdicts prefixed test-only, and one exclusion matching
 // that prefix silences the family. Excluding tests behaves exactly as before.
 //
+// Two settings declare structure the analysis cannot discover. test-facing
+// names packages whose intended consumers are tests — a test plugin
+// production-shaped enough that the compiler cannot tell — so their own surface
+// stops drawing the test-only family while a production declaration only they
+// keep alive draws it completely. roots names entry-point files the loader
+// cannot reach, conventionally ignore-tagged package main generators run
+// with go run; each is loaded as its own single-file program, contributing call
+// edges and references without ever being reported on.
+//
 // An absent key and an empty list mean different things. Omitting patterns
 // analyzes the whole module; writing patterns: [] names no packages at all
 // and is rejected rather than quietly read as the default.

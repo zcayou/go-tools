@@ -54,6 +54,21 @@ type Settings struct {
 	// type, const, var, or interface-method. Defaults to method when API is set.
 	// Requires API.
 	APIExempt []string `json:"api-exempt"`
+
+	// TestFacing are package patterns whose intended consumers are tests:
+	// production-shaped code, a test plugin say, that exists to be exercised
+	// by test files. A declared package draws no test-only verdicts of its own —
+	// being alive only through tests is its job — while a production declaration
+	// only it keeps alive draws the complete test-only family. Requires tests.
+	TestFacing []string `json:"test-facing"`
+
+	// Roots are file paths or globs, relative to the module root, naming
+	// entry-point files the analysis cannot otherwise see — conventionally
+	// single-file package main programs behind //go:build ignore, run with go run.
+	// Each resolved file is loaded as its own main program: its call edges
+	// and references count as production evidence, and nothing in it is ever
+	// reported.
+	Roots []string `json:"roots"`
 }
 
 // Plugin adapts the whole-program engine to golangci-lint's per-package linter
@@ -129,18 +144,29 @@ func configFrom(s Settings) (engine.Config, error) {
 	if s.Patterns != nil && len(s.Patterns) == 0 {
 		return engine.Config{}, errors.New("patterns is empty: omit it to analyze the whole module")
 	}
+	if s.TestFacing != nil && len(s.TestFacing) == 0 {
+		return engine.Config{}, errors.New("test-facing is empty: omit it to declare no test-facing packages")
+	}
+	if s.Roots != nil && len(s.Roots) == 0 {
+		return engine.Config{}, errors.New("roots is empty: omit it to declare no root programs")
+	}
 
 	tests := true
 	if s.Tests != nil {
 		tests = *s.Tests
 	}
+	if len(s.TestFacing) > 0 && !tests {
+		return engine.Config{}, errors.New("test-facing requires tests: the masked view is all it speaks to")
+	}
 
 	return engine.Config{
-		Patterns:  s.Patterns,
-		BuildTags: s.BuildTags,
-		Tests:     tests,
-		API:       s.API,
-		APIExempt: exempts,
+		Patterns:   s.Patterns,
+		BuildTags:  s.BuildTags,
+		Tests:      tests,
+		API:        s.API,
+		APIExempt:  exempts,
+		TestFacing: s.TestFacing,
+		Roots:      s.Roots,
 	}, nil
 }
 

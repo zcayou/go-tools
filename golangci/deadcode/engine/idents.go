@@ -57,8 +57,14 @@ func unreferencedTypes(idents []declaration, surface *apiSurface) map[string]boo
 	return dead
 }
 
+// addPackage records the package's declarations, uses, and spans. A synthesized
+// root program contributes uses and nothing else: its references are what make
+// a declared entry point count, while its own declarations are never
+// candidates.
 func (s *identScan) addPackage(pkg *packages.Package, facts fileFacts, v view) {
-	s.addDeclarations(pkg, facts)
+	if !synthesizedPackage(pkg.PkgPath) {
+		s.addDeclarations(pkg, facts)
+	}
 	s.addUses(pkg, v)
 	s.addSpans(pkg)
 }

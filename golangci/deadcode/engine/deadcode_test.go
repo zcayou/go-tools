@@ -246,6 +246,172 @@ var _ = Describe("Analyze", func() {
 		})
 	})
 
+	Describe("declared test-facing packages", func() {
+		// The kit package is production-shaped and consumed only by the main
+		// package's test file, through a production declaration of its own
+		// that nothing else reaches.
+		It("pins what the declaration buys: the family names the package and dims the trail", func(ctx SpecContext) {
+			// Without the declaration kit's whole surface draws the family — being alive
+			// only through tests is its job — and lib.Only draws the missing-root
+			// signature, unreachable without the unused half, because kit's reference
+			// still counts.
+			Expect(analyzeWith(ctx, "testfacing", engine.Config{Tests: true})).To(Equal([]string{
+				"kit/kit.go:11:6: unreachable func: orphan",
+				"kit/kit.go:8:6: test-only unreachable func: Greet",
+				"lib/lib.go:8:6: test-only unreachable func: Only",
+				"kit/kit.go:8:6: test-only unused exported func: Greet",
+			}))
+		})
+
+		It("extends test origin by declaration and sharpens what lies downstream", func(ctx SpecContext) {
+			// kit's declarations are judged in the full view alone: Greet draws nothing,
+			// while orphan — dead even with tests counted — keeps its plain verdict.
+			// lib.Only loses kit's reference along with its reachability, so it draws
+			// both halves of the family.
+			Expect(analyzeWith(ctx, "testfacing", engine.Config{
+				Tests:      true,
+				TestFacing: []string{"./kit"},
+			})).To(Equal([]string{
+				"kit/kit.go:11:6: unreachable func: orphan",
+				"lib/lib.go:8:6: test-only unreachable func: Only",
+				"lib/lib.go:8:6: test-only unused exported func: Only",
+			}))
+		})
+
+		It("rejects test-facing without tests", func(ctx SpecContext) {
+			_, err := engine.Analyze(ctx, engine.Config{
+				Dir:        fixtureDir("testfacing"),
+				Patterns:   []string{"./..."},
+				TestFacing: []string{"./kit"},
+			})
+
+			Expect(err).To(MatchError(ContainSubstring("test-facing requires tests")))
+		})
+
+		It("rejects a test-facing pattern that resolves to nothing", func(ctx SpecContext) {
+			_, err := engine.Analyze(ctx, engine.Config{
+				Dir:        fixtureDir("testfacing"),
+				Patterns:   []string{"./..."},
+				Tests:      true,
+				TestFacing: []string{"./nope"},
+			})
+
+			Expect(err).To(MatchError(ContainSubstring("resolving test-facing pattern ./nope")))
+		})
+
+		It("rejects a package declared both api and test-facing", func(ctx SpecContext) {
+			// The two assert contradictory facts about who the package's consumers are.
+			_, err := engine.Analyze(ctx, engine.Config{
+				Dir:        fixtureDir("testfacing"),
+				Patterns:   []string{"./..."},
+				Tests:      true,
+				API:        []string{"./kit"},
+				TestFacing: []string{"./kit"},
+			})
+
+			Expect(err).To(MatchError(ContainSubstring("declared both api and test-facing: testfacing/kit")))
+		})
+	})
+
+	Describe("declared root programs", func() {
+		// The tools directory holds two colliding ignore-tagged generators —
+		// the convention's normal one-directory form, unreachable through build-tags
+		// — and lib is reached almost entirely by them.
+		It("pins the blind spot: an invisible entry point silences nothing", func(ctx SpecContext) {
+			Expect(analyzeFixture(ctx, "declaredroots")).To(Equal([]string{
+				"lib/lib.go:5:6: unreachable func: Generate",
+				"lib/lib.go:8:6: unreachable func: Sweep",
+				"lib/lib.go:11:6: unreachable func: Untouched",
+				"lib/lib.go:13:6: unreachable func: helper",
+				"lib/lib.go:5:6: unused exported func: Generate",
+				"lib/lib.go:8:6: unused exported func: Sweep",
+				"lib/lib.go:11:6: unused exported func: Untouched",
+			}))
+		})
+
+		It("loads each declared file as its own program: roots and evidence, never findings", func(ctx SpecContext) {
+			// Both generators load side by side despite colliding declarations, their
+			// call edges and references count, the declaration no generator reaches
+			// keeps its findings, and nothing in a root program is ever reported.
+			Expect(analyzeWith(ctx, "declaredroots", engine.Config{
+				Roots: []string{"tools/*.go"},
+			})).To(Equal([]string{
+				"lib/lib.go:11:6: unreachable func: Untouched",
+				"lib/lib.go:11:6: unused exported func: Untouched",
+			}))
+		})
+
+		It("roots the generators in the masked view too", func(ctx SpecContext) {
+			// Generate is reached by a test and a generator both. A root program
+			// is a production consumer, so under the mask Generate stays reachable
+			// and referenced — it draws nothing in either view.
+			Expect(analyzeWith(ctx, "declaredroots", engine.Config{
+				Tests: true,
+				Roots: []string{"tools/*.go"},
+			})).To(Equal([]string{
+				"lib/lib.go:11:6: unreachable func: Untouched",
+				"lib/lib.go:11:6: unused exported func: Untouched",
+			}))
+		})
+
+		It("rejects a roots path naming a missing file", func(ctx SpecContext) {
+			_, err := engine.Analyze(ctx, engine.Config{
+				Dir:      fixtureDir("declaredroots"),
+				Patterns: []string{"./..."},
+				Roots:    []string{"tools/nope.go"},
+			})
+
+			Expect(err).To(MatchError(ContainSubstring(`roots pattern "tools/nope.go" matched no files`)))
+		})
+
+		It("rejects a roots glob matching nothing", func(ctx SpecContext) {
+			_, err := engine.Analyze(ctx, engine.Config{
+				Dir:      fixtureDir("declaredroots"),
+				Patterns: []string{"./..."},
+				Roots:    []string{"gen/*.go"},
+			})
+
+			Expect(err).To(MatchError(ContainSubstring(`roots pattern "gen/*.go" matched no files`)))
+		})
+
+		It("rejects a declared file that is not a main program", func(ctx SpecContext) {
+			_, err := engine.Analyze(ctx, engine.Config{
+				Dir:      fixtureDir("declaredroots"),
+				Patterns: []string{"./..."},
+				Roots:    []string{"lib/lib.go"},
+			})
+
+			Expect(err).To(MatchError(ContainSubstring("root program lib/lib.go declares package lib, not main")))
+		})
+
+		It("rejects a root program with no func main", func(ctx SpecContext) {
+			// go/types does not require one — that is the linker's rule — and without
+			// this check the file would contribute evidence but no root, a silent
+			// half-effect.
+			_, err := engine.Analyze(ctx, engine.Config{
+				Dir:      fixtureDir("declaredroots"),
+				Patterns: []string{"./..."},
+				Roots:    []string{"partial/prog.go"},
+			})
+
+			Expect(err).To(MatchError(ContainSubstring("root program partial/prog.go declares no func main")))
+		})
+
+		It("refuses to run while the reserved directory exists on disk", func(ctx SpecContext) {
+			reserved := filepath.Join(fixtureDir("declaredroots"), ".deadcode-roots")
+			Expect(os.Mkdir(reserved, 0o750)).To(Succeed())
+			DeferCleanup(func() { Expect(os.Remove(reserved)).To(Succeed()) })
+
+			_, err := engine.Analyze(ctx, engine.Config{
+				Dir:      fixtureDir("declaredroots"),
+				Patterns: []string{"./..."},
+				Roots:    []string{"tools/*.go"},
+			})
+
+			Expect(err).To(MatchError(ContainSubstring("reserved for synthesized root programs")))
+		})
+	})
+
 	It("analyzes the files a build tag brings in", func(ctx SpecContext) {
 		Expect(analyzeFixture(ctx, "buildtags")).To(BeEmpty())
 		Expect(analyzeWith(ctx, "buildtags", engine.Config{BuildTags: []string{"integration"}})).To(Equal([]string{

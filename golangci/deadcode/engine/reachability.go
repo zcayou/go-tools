@@ -35,11 +35,11 @@ type reachability struct {
 // — the body runs under a name no source reference mentions, which is what
 // a root is.
 //
-// Under the masked view no test-variant package contributes roots of any kind.
-// The synthesized test main is an ordinary main package, and the in-package
-// variant shares the plain package's path while its initializer runs
-// the _test.go files' inits, so exclusion goes by package identity — only
-// the plain variants remain.
+// Under the masked view neither test-variant packages nor declared test-facing
+// packages contribute roots of any kind. The synthesized test main
+// is an ordinary main package, and the in-package variant shares the plain
+// package's path while its initializer runs the _test.go files' inits, so
+// exclusion goes by package identity — only the plain variants remain.
 func selectRoots(
 	prog *ssa.Program,
 	ssaPkgs []*ssa.Package,
@@ -51,7 +51,7 @@ func selectRoots(
 	v view,
 ) ([]*ssa.Function, error) {
 	rooted := func(i int) *ssa.Package {
-		if ssaPkgs[i] == nil || (v.masked && testVariant(initial[i])) {
+		if ssaPkgs[i] == nil || !v.admitsRoots(initial[i]) {
 			return nil
 		}
 		return ssaPkgs[i]
@@ -187,6 +187,9 @@ func unreachableDecls(
 	seen := map[string]bool{}
 	var found []declaration
 	for _, pkg := range initial {
+		if synthesizedPackage(pkg.PkgPath) {
+			continue
+		}
 		generated := facts[pkg].generated
 		linknamed := facts[pkg].linknamed
 		for _, file := range pkg.Syntax {

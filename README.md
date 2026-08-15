@@ -97,6 +97,8 @@ linters:
           tests: true              # default; matches run.tests, and reports the test-only family
           api: ['./pkg/...']       # package patterns whose exported surface consumers reach
           api-exempt: [method]     # default when api is set
+          test-facing: ['./plugins/test/...']  # packages whose intended consumers are tests
+          roots: ['tools/*.go']    # entry-point files the load cannot reach
 ```
 
 With `tests: true`, production code that only test code keeps alive is
@@ -115,15 +117,31 @@ linters:
         text: '^test-only '
 ```
 
+`test-facing` declares packages whose intended consumers are tests — a test
+plugin that looks, feels, and compiles like a production plugin, kept alive by
+nothing but the tests that exercise it, which is its job. A declared package
+stops drawing the `test-only` family on its own surface (dead code inside it
+still reports with plain verdicts), while a production declaration only it
+keeps alive draws the family completely. It requires `tests: true`, and a
+package cannot be declared both `api` and `test-facing`.
+
+`roots` names entry-point files the loader cannot reach: conventionally
+`package main` generators behind `//go:build ignore`, run with `go run`, where
+the tag is what lets several such programs share one directory — which is also
+why `build-tags: [ignore]` cannot admit them without making the siblings
+collide. Each named file (paths or globs, relative to the module root) is
+loaded as its own single-file main program: its call edges and references count
+as production evidence in both views, and nothing in it is ever reported.
+
 Two settings that need care:
 
 - Set `issues.uniq-by-line: false` — the default `true` silently discards
   findings, because deadcode reports more than one verdict per declaration on
   purpose.
-- To suppress findings in test-support packages, exclude their *paths* rather
-  than narrowing `patterns`. Narrowing `patterns` shrinks what gets loaded,
-  which invents dead code: a package dropped from the analysis stops being a
-  use of anything.
+- Never suppress test-support packages by narrowing `patterns`. Narrowing
+  `patterns` shrinks what gets loaded, which invents dead code: a package
+  dropped from the analysis stops being a use of anything. Declare the package
+  `test-facing` instead.
 
 ## Usage
 

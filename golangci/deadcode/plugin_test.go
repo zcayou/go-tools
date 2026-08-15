@@ -26,6 +26,8 @@ var _ = Describe("Plugin", func() {
 			"api":        []string{"./pkg/..."},
 			"api-exempt": []string{"method", "func", "type", "const", "var", "interface-method"},
 		}),
+		Entry("test-facing under the default tests", map[string]any{"test-facing": []string{"./plugins/test/..."}}),
+		Entry("roots", map[string]any{"roots": []string{"tools/*.go"}}),
 	)
 
 	DescribeTable("rejected settings",
@@ -43,6 +45,13 @@ var _ = Describe("Plugin", func() {
 		Entry("an unknown exemption",
 			map[string]any{"api": []string{"./..."}, "api-exempt": []string{"nonsense"}},
 			`unknown api-exempt "nonsense"`),
+		Entry("test-facing with the masked view it speaks to turned off",
+			map[string]any{"tests": false, "test-facing": []string{"./plugins/test/..."}},
+			"test-facing requires tests"),
+		Entry("an empty test-facing list means the packages in it, of which there are none",
+			map[string]any{"test-facing": []string{}}, "test-facing is empty"),
+		Entry("an empty roots list means the files in it, of which there are none",
+			map[string]any{"roots": []string{}}, "roots is empty"),
 	)
 
 	It("names the decoding failure once", func() {

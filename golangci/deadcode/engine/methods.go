@@ -51,6 +51,9 @@ func newMethodScan(pkgs []*packages.Package, facts map[*packages.Package]fileFac
 }
 
 func (s *methodScan) addPackage(pkg *packages.Package, facts fileFacts) {
+	if synthesizedPackage(pkg.PkgPath) {
+		return
+	}
 	for _, file := range pkg.Syntax {
 		for _, decl := range file.Decls {
 			funcDecl, ok := decl.(*ast.FuncDecl)
@@ -105,14 +108,19 @@ func newMethodReferenceScan(
 	return scan
 }
 
+// addPackageDeclarations records the method and interface declarations
+// the package holds. A synthesized root program contributes only its blank
+// assertion spans — the one declaration-side fact that filters uses rather than
+// adding candidates.
 func (s *methodReferenceScan) addPackageDeclarations(pkg *packages.Package, facts fileFacts) {
 	fset := pkg.Fset
+	synthesized := synthesizedPackage(pkg.PkgPath)
 
 	for _, file := range pkg.Syntax {
 		for _, decl := range file.Decls {
 			switch decl := decl.(type) {
 			case *ast.FuncDecl:
-				if decl.Recv == nil || len(decl.Recv.List) == 0 {
+				if synthesized || decl.Recv == nil || len(decl.Recv.List) == 0 {
 					continue
 				}
 				obj, ok := pkg.TypesInfo.Defs[decl.Name].(*types.Func)
@@ -125,7 +133,9 @@ func (s *methodReferenceScan) addPackageDeclarations(pkg *packages.Package, fact
 			case *ast.GenDecl:
 				switch decl.Tok {
 				case token.TYPE:
-					s.addInterfaceMethods(pkg, decl, facts.generated)
+					if !synthesized {
+						s.addInterfaceMethods(pkg, decl, facts.generated)
+					}
 				case token.VAR:
 					s.addBlankVarSpans(pkg, decl)
 				}

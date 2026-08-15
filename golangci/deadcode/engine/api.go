@@ -48,13 +48,23 @@ func kindList() string {
 	return strings.Join(names, ", ")
 }
 
-// resolve turns the API patterns into the package paths they match, loading
-// names only. Patterns resolve against the same build configuration
-// as the analysis so that build tags apply.
+// resolve turns the API patterns into the package paths they match.
 func (s *apiSurface) resolve(load *packages.Config) error {
 	if len(s.patterns) == 0 {
 		return nil
 	}
+	resolved, err := resolvePatterns(load, "api", s.patterns)
+	if err != nil {
+		return err
+	}
+	s.packages = resolved
+	return nil
+}
+
+// resolvePatterns turns package patterns into the paths they match, loading
+// names only. Patterns resolve against the same build configuration
+// as the analysis so that build tags apply.
+func resolvePatterns(load *packages.Config, what string, patterns []string) (map[string]bool, error) {
 	names := &packages.Config{
 		Mode:       packages.NeedName,
 		Context:    load.Context,
@@ -62,31 +72,31 @@ func (s *apiSurface) resolve(load *packages.Config) error {
 		BuildFlags: load.BuildFlags,
 		Dir:        load.Dir,
 	}
-	matched, err := packages.Load(names, s.patterns...)
+	matched, err := packages.Load(names, patterns...)
 	if err != nil {
-		return fmt.Errorf("resolving api packages: %w", err)
+		return nil, fmt.Errorf("resolving %s packages: %w", what, err)
 	}
-	s.packages = map[string]bool{}
+	resolved := map[string]bool{}
 	for _, pkg := range matched {
 		// A pattern that resolves to nothing still comes back as a package:
 		// the pattern text stands in for the path and the reason sits in Errors.
 		// Recorded as-is it would be a path no declaration can match, leaving
-		// the surface silently shielding nothing.
+		// the declared set silently covering nothing.
 		if len(pkg.Errors) > 0 {
 			errs := make([]error, 0, len(pkg.Errors))
 			for _, e := range pkg.Errors {
 				errs = append(errs, e)
 			}
-			return fmt.Errorf("resolving api pattern %s: %w", pkg.PkgPath, errors.Join(errs...))
+			return nil, fmt.Errorf("resolving %s pattern %s: %w", what, pkg.PkgPath, errors.Join(errs...))
 		}
 		if pkg.PkgPath != "" {
-			s.packages[pkg.PkgPath] = true
+			resolved[pkg.PkgPath] = true
 		}
 	}
-	if len(s.packages) == 0 {
-		return fmt.Errorf("api %s matched no packages", strings.Join(s.patterns, ","))
+	if len(resolved) == 0 {
+		return nil, fmt.Errorf("%s %s matched no packages", what, strings.Join(patterns, ","))
 	}
-	return nil
+	return resolved, nil
 }
 
 // shields reports whether the declared surface covers this declaration at all.

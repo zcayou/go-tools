@@ -55,6 +55,19 @@
 // is a root wherever it appears, and is not reported: the body runs under
 // a name no reference in source mentions.
 //
+// A file [Config.Roots] declares is loaded as its own single-file main program
+// — the go run model, for the conventional package main file behind //go:build
+// ignore. The default load structurally cannot see such a file, and build tags
+// cannot admit it, because the tag is what lets several such programs share one
+// directory; applied, the siblings collide and the directory stops type
+// checking. The synthesized program's main roots in every view — a declared
+// root is a production entry point, so it composes with either value
+// of [Config.Tests] — and each fact in it counts as evidence through
+// the ordinary scans, while its own declarations are never candidates and its
+// packages are not among the analyzed set: an interface it declares credits
+// unconditionally, the way a dependency's does. A declared entry point adds
+// edges, and nothing else.
+//
 // Generic declarations cannot be rooted, because an uninstantiated body has no
 // concrete instance and RTA rejects a type parameter as a runtime type.
 // A generic-heavy API standing in for its own roots therefore leaves the code
@@ -194,6 +207,19 @@
 // test code is the only thing keeping it alive. Declarations in test
 // and generated files are judged in the full view alone, and the API surface
 // exempts in both views before the diff.
+//
+// Some test code cannot be spelled as test code: a test plugin looks, feels,
+// and compiles exactly like a production plugin, and only who consumes it makes
+// it test code. [Config.TestFacing] declares such packages into the definition
+// of test origin. Under the mask a declared package's facts are removed exactly
+// as _test.go facts are and it contributes no roots; its own declarations
+// are judged in the full view alone — being alive only through tests is its
+// job, while dead code inside it keeps its plain verdicts — and a production
+// declaration whose only consumer it was loses the references along
+// with the reachability, so it draws the complete family rather than
+// the unreachable half a bare root exclusion could produce. Declaring the same
+// package api is refused: the two assert contradictory facts about who its
+// consumers are.
 //
 // The masked view is deliberately not a run without tests. As above, the loaded
 // set is an input: a narrower load changes interface ownership and answers

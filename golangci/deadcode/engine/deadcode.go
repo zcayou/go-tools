@@ -120,6 +120,21 @@ type Config struct {
 	// An exempt declaration is still a call-graph root, so whatever it alone
 	// reaches stays live.
 	APIExempt []Kind
+
+	// TestFacing are package patterns whose intended consumers are tests:
+	// production-shaped code that exists to be exercised by test files. They join
+	// the masked view's definition of test origin — their evidence and roots
+	// are removed alongside _test.go facts, their own declarations never draw
+	// test-only verdicts, and a production declaration only they keep alive draws
+	// the complete test-only family. Requires Tests.
+	TestFacing []string
+
+	// Roots are file paths or globs, relative to Dir, naming entry-point files
+	// the load cannot reach — conventionally single-file package main programs
+	// behind //go:build ignore, run with go run. Each resolved file is loaded
+	// as its own main program: its main roots the call graph in both views and its
+	// facts count as evidence, while nothing in it is ever reported.
+	Roots []string
 }
 
 // Finding is one reported declaration.
@@ -156,6 +171,10 @@ func Analyze(ctx context.Context, cfg Config) ([]Finding, error) {
 	if err != nil {
 		return nil, err
 	}
+	declared, err := newTestFacing(cfg.TestFacing, cfg.Tests)
+	if err != nil {
+		return nil, err
+	}
 
 	dir := cfg.Dir
 	if dir == "" {
@@ -174,22 +193,14 @@ func Analyze(ctx context.Context, cfg Config) ([]Finding, error) {
 		load.BuildFlags = []string{"-tags=" + strings.Join(cfg.BuildTags, ",")}
 	}
 
-	patterns := cfg.Patterns
-	if len(patterns) == 0 {
-		patterns = []string{"./..."}
-	}
-
-	pkgs, err := packages.Load(load, patterns...)
+	pkgs, err := loadProgram(ctx, cfg, dir, load)
 	if err != nil {
-		return nil, fmt.Errorf("loading packages: %w", err)
-	}
-	if err = canceled(ctx, "loading packages"); err != nil {
-		return nil, err
-	}
-	if err = loadErrors(pkgs); err != nil {
 		return nil, err
 	}
 	if err = surface.resolve(load); err != nil {
+		return nil, err
+	}
+	if err = declared.resolve(load, surface); err != nil {
 		return nil, err
 	}
 
@@ -219,11 +230,48 @@ func Analyze(ctx context.Context, cfg Config) ([]Finding, error) {
 	// a program whose only entry points are tests has nothing to root at once they
 	// are set aside, and [ErrNoRoots] holds that reachability is then undefined
 	// rather than empty — an empty family would read as all clear.
-	masked, err := evaluate(ctx, prog, ssaPkgs, pkgs, surface, facts, methodDecls, false, view{masked: true})
+	masked, err := evaluate(ctx, prog, ssaPkgs, pkgs, surface, facts, methodDecls, false,
+		view{masked: true, testFacing: declared.packages})
 	if err != nil {
 		return nil, fmt.Errorf("analyzing test-only liveness: %w", err)
 	}
-	return append(findings, testOnlyFindings(full, masked)...), nil
+	return append(findings, testOnlyFindings(full, masked, declared.packages)...), nil
+}
+
+// loadProgram loads the analyzed program: the configured patterns, plus one
+// synthesized package per declared root program, validated as a whole.
+func loadProgram(ctx context.Context, cfg Config, dir string, load *packages.Config) ([]*packages.Package, error) {
+	patterns := cfg.Patterns
+	if len(patterns) == 0 {
+		patterns = []string{"./..."}
+	}
+	var programs []rootProgram
+	if len(cfg.Roots) > 0 {
+		var overlay map[string][]byte
+		var err error
+		if programs, overlay, err = loadRootPrograms(dir, cfg.Roots); err != nil {
+			return nil, err
+		}
+		load.Overlay = overlay
+		for _, program := range programs {
+			patterns = append(patterns, program.pattern)
+		}
+	}
+
+	pkgs, err := packages.Load(load, patterns...)
+	if err != nil {
+		return nil, fmt.Errorf("loading packages: %w", err)
+	}
+	if err = canceled(ctx, "loading packages"); err != nil {
+		return nil, err
+	}
+	if err = loadErrors(pkgs); err != nil {
+		return nil, err
+	}
+	if err = validateRootPrograms(pkgs, programs); err != nil {
+		return nil, err
+	}
+	return pkgs, nil
 }
 
 // evaluate runs every verdict pass over the built program under one evidence
@@ -285,16 +333,18 @@ func evaluate(
 // testOnlyFindings diffs the two views by declaration: a production declaration
 // the masked view reports and the full view does not is one only test evidence
 // keeps alive, and it surfaces under its masked verdicts in their test-only
-// form. Declarations in test files are judged in the full view alone — test
-// code judging test code has no masked question to answer.
-func testOnlyFindings(full, masked []declaration) []Finding {
+// form. Declarations in test files and in declared test-facing packages
+// are judged in the full view alone — test code judging test code has no masked
+// question to answer, and being alive only through tests is a declared
+// package's job.
+func testOnlyFindings(full, masked []declaration, testFacing map[string]bool) []Finding {
 	reported := make(map[string]bool, len(full))
 	for _, decl := range full {
 		reported[declKey(decl.pos)] = true
 	}
 	var findings []Finding
 	for _, decl := range masked {
-		if reported[declKey(decl.pos)] || testFile(decl.pos.Filename) {
+		if reported[declKey(decl.pos)] || testFile(decl.pos.Filename) || testFacing[decl.pkg] {
 			continue
 		}
 		decl.verdict = decl.verdict.testOnly()
@@ -342,11 +392,13 @@ func loadErrors(pkgs []*packages.Package) error {
 }
 
 // analyzedPackages returns the import paths this run reports on, the interfaces
-// whose own liveness it can measure.
+// whose own liveness it can measure. A synthesized root program is not among
+// them — nothing in it is ever reported — so an interface it declares credits
+// unconditionally, the way a dependency's does.
 func analyzedPackages(pkgs []*packages.Package) map[string]bool {
 	analyzed := make(map[string]bool, len(pkgs))
 	for _, pkg := range pkgs {
-		if pkg.PkgPath != "" {
+		if pkg.PkgPath != "" && !synthesizedPackage(pkg.PkgPath) {
 			analyzed[pkg.PkgPath] = true
 		}
 	}
