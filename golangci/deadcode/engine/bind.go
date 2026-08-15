@@ -37,13 +37,14 @@ func newInterfaceBindScan(
 	ev *evidence,
 	inst *instantiations,
 	flows *interfaceFlows,
+	v view,
 ) *interfaceBindScan {
 	scan := &interfaceBindScan{credited: map[string]bool{}}
 
 	for operand, iface := range ev.conversions {
 		scan.creditConversion(prog, refs, flows, analyzed, operand, iface)
 	}
-	for _, asserted := range assertedInterfaces(loaded) {
+	for _, asserted := range assertedInterfaces(loaded, v) {
 		scan.creditAssertion(prog.Fset, refs, flows, analyzed, ev, inst, asserted)
 	}
 	scan.creditInstantiations(prog.Fset, refs, flows, analyzed, inst)
@@ -233,18 +234,22 @@ type assertedType struct {
 }
 
 // assertedInterfaces returns every interface type the loaded packages assert
-// to, dependencies included. A library discovers an optional capability
-// by asserting — errors.Is looks for an Unwrap, a decoder looks
-// for an Unmarshaler — and that assertion is the only evidence in source
-// that the methods behind it run.
-func assertedInterfaces(loaded []*packages.Package) []assertedType {
+// to in files the view admits, dependencies included. A library discovers
+// an optional capability by asserting — errors.Is looks for an Unwrap,
+// a decoder looks for an Unmarshaler — and that assertion is the only evidence
+// in source that the methods behind it run. Dependencies load without their
+// tests, so masking only ever bites the analyzed packages' own test files.
+func assertedInterfaces(loaded []*packages.Package, v view) []assertedType {
 	var asserted []assertedType
 	seen := map[string]bool{}
 	packages.Visit(loaded, nil, func(pkg *packages.Package) {
-		if pkg.TypesInfo == nil {
+		if pkg.TypesInfo == nil || !v.admitsPackage(pkg.PkgPath) {
 			return
 		}
 		for _, file := range pkg.Syntax {
+			if !v.admitsFile(position(pkg.Fset, file.Pos()).Filename) {
+				continue
+			}
 			for _, decl := range file.Decls {
 				switch decl := decl.(type) {
 				case *ast.FuncDecl:

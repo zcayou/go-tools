@@ -34,6 +34,12 @@ type reachability struct {
 // analyzes. Functions a //go:linkname directive publishes are added either way
 // — the body runs under a name no source reference mentions, which is what
 // a root is.
+//
+// Under the masked view no test-variant package contributes roots of any kind.
+// The synthesized test main is an ordinary main package, and the in-package
+// variant shares the plain package's path while its initializer runs
+// the _test.go files' inits, so exclusion goes by package identity — only
+// the plain variants remain.
 func selectRoots(
 	prog *ssa.Program,
 	ssaPkgs []*ssa.Package,
@@ -42,9 +48,18 @@ func selectRoots(
 	deadTypes map[string]bool,
 	facts map[*packages.Package]fileFacts,
 	tests bool,
+	v view,
 ) ([]*ssa.Function, error) {
+	rooted := func(i int) *ssa.Package {
+		if ssaPkgs[i] == nil || (v.masked && testVariant(initial[i])) {
+			return nil
+		}
+		return ssaPkgs[i]
+	}
+
 	var roots []*ssa.Function
-	for _, ssaPkg := range ssaPkgs {
+	for i := range ssaPkgs {
+		ssaPkg := rooted(i)
 		if ssaPkg == nil {
 			continue
 		}
@@ -55,20 +70,21 @@ func selectRoots(
 			roots = append(roots, testEntries(ssaPkg)...)
 		}
 	}
-	for _, ssaPkg := range ssaPkgs {
-		if ssaPkg != nil && surface.packages[ssaPkg.Pkg.Path()] {
+	for i := range ssaPkgs {
+		if ssaPkg := rooted(i); ssaPkg != nil && surface.packages[ssaPkg.Pkg.Path()] {
 			roots = append(roots, exportedRoots(prog, ssaPkg, deadTypes)...)
 		}
 	}
 	if len(roots) == 0 {
-		for _, ssaPkg := range ssaPkgs {
-			roots = append(roots, exportedRoots(prog, ssaPkg, deadTypes)...)
+		for i := range ssaPkgs {
+			roots = append(roots, exportedRoots(prog, rooted(i), deadTypes)...)
 		}
 	}
 	if len(roots) == 0 {
 		return nil, ErrNoRoots
 	}
-	for i, ssaPkg := range ssaPkgs {
+	for i := range ssaPkgs {
+		ssaPkg := rooted(i)
 		if ssaPkg == nil {
 			continue
 		}
@@ -100,7 +116,7 @@ func testEntries(pkg *ssa.Package) []*ssa.Function {
 		if !ok || fn.Signature.Recv() != nil || fn.TypeParams().Len() != 0 {
 			continue
 		}
-		if !strings.HasSuffix(position(pkg.Prog.Fset, fn.Pos()).Filename, "_test.go") {
+		if !testFile(position(pkg.Prog.Fset, fn.Pos()).Filename) {
 			continue
 		}
 		switch name := fn.Name(); {
@@ -134,9 +150,10 @@ func unreachableFuncs(
 	deadTypes map[string]bool,
 	facts map[*packages.Package]fileFacts,
 	tests bool,
+	v view,
 	participation func(key string) bool,
 ) ([]declaration, reachability, error) {
-	roots, err := selectRoots(prog, ssaPkgs, initial, surface, deadTypes, facts, tests)
+	roots, err := selectRoots(prog, ssaPkgs, initial, surface, deadTypes, facts, tests, v)
 	if err != nil {
 		return nil, reachability{}, err
 	}

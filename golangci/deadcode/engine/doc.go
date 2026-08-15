@@ -172,6 +172,39 @@
 // method findings a narrower run credited away. Two runs over different scopes
 // are answering different questions, and neither is a subset of the other.
 //
+// # Test-only liveness
+//
+// Including tests makes test evidence circular for production code: a test
+// exists because of the declaration it exercises, so it can never show
+// the program needs it. Dead production code is usually dead-but-tested — its
+// test was written when it had callers and outlived them — and under a single
+// evaluation such a declaration is self-certifying, invisible forever.
+//
+// Under [Config.Tests] the engine therefore evaluates every verdict twice over
+// the same loaded program: once with all evidence, and once with test-origin
+// evidence masked. Test-origin means any fact positioned in a _test.go file —
+// references, selections, conversions, assertions, instantiations,
+// materializations, flow edges — together with the roots that exist only
+// because of tests: the synthesized test mains and the test entry points,
+// excluded by package identity because the in-package test variant shares
+// the plain package's import path. A production declaration then lands
+// in exactly one bucket: live in both views, and silent; reported in the full
+// view, and reported exactly as a single evaluation would; or reported only
+// under the mask, which surfaces its masked verdicts in their test-only form —
+// test code is the only thing keeping it alive. Declarations in test
+// and generated files are judged in the full view alone, and the API surface
+// exempts in both views before the diff.
+//
+// The masked view is deliberately not a run without tests. As above, the loaded
+// set is an input: a narrower load changes interface ownership and answers
+// a different question. Masking holds the program constant, so the two
+// evaluations differ in exactly one variable — whether test evidence exists.
+//
+// A program whose only entry points are tests is refused with [ErrNoRoots]:
+// with test roots set aside there is nothing to root at, and reachability
+// is undefined rather than empty. Declaring an API surface is what gives such
+// a module production roots to measure against.
+//
 // # Load requirements
 //
 // The load must request syntax and type information for the whole transitive

@@ -3,14 +3,22 @@ package engine
 import (
 	"go/token"
 	"go/types"
+
+	"golang.org/x/tools/go/packages"
+	"golang.org/x/tools/go/ssa"
 )
 
 // The specs are black-box files like every other test in the module,
 // and the unit-level components they exercise are deliberately engine-internal.
 // This bridge re-exports those internals for them and carries nothing else.
+// The constructors are exposed under the full view — masking is exercised
+// through Analyze over whole-module fixtures, where the loaded program actually
+// carries test variants.
 
 // NewInstantiations exposes newInstantiations.
-var NewInstantiations = newInstantiations
+var NewInstantiations = func(loaded []*packages.Package) *instantiations {
+	return newInstantiations(loaded, view{})
+}
 
 // Substitute exposes substitute.
 var Substitute = substitute
@@ -24,7 +32,9 @@ func (s *instantiations) Vectors(obj types.Object) [][]types.Type {
 }
 
 // NewEvidence exposes newEvidence.
-var NewEvidence = newEvidence
+var NewEvidence = func(prog *ssa.Program, inst *instantiations) *evidence {
+	return newEvidence(prog, inst, view{})
+}
 
 // Materialized exposes evidence.materialized.
 func (e *evidence) Materialized(method *types.Func) bool {
@@ -46,10 +56,18 @@ func (e *evidence) Granted(t types.Type) bool {
 var NewFileFacts = newFileFacts
 
 // NewMethodReferenceScan exposes newMethodReferenceScan.
-var NewMethodReferenceScan = newMethodReferenceScan
+var NewMethodReferenceScan = func(
+	pkgs []*packages.Package,
+	facts map[*packages.Package]fileFacts,
+	ev *evidence,
+) *methodReferenceScan {
+	return newMethodReferenceScan(pkgs, facts, ev, view{})
+}
 
 // NewInterfaceFlows exposes newInterfaceFlows.
-var NewInterfaceFlows = newInterfaceFlows
+var NewInterfaceFlows = func(prog *ssa.Program, inst *instantiations, refs *methodReferenceScan) *interfaceFlows {
+	return newInterfaceFlows(prog, inst, refs, view{})
+}
 
 // Used exposes interfaceFlows.used.
 func (f *interfaceFlows) Used(key string) bool {

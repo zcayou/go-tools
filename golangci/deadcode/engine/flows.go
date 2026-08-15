@@ -50,14 +50,14 @@ type flowMethod struct {
 // newInterfaceFlows collects the edges and propagates use to a fixpoint.
 // The roots are the interface methods whose direct selections pass the existing
 // span filtering.
-func newInterfaceFlows(prog *ssa.Program, inst *instantiations, refs *methodReferenceScan) *interfaceFlows {
+func newInterfaceFlows(prog *ssa.Program, inst *instantiations, refs *methodReferenceScan, v view) *interfaceFlows {
 	flows := &interfaceFlows{marked: map[string]bool{}}
 	for key := range refs.interfaceMethods {
 		if refs.interfaceMethodUsed(key) {
 			flows.marked[key] = true
 		}
 	}
-	flows.propagate(prog.Fset, refs, flowEdges(prog, inst, refs))
+	flows.propagate(prog.Fset, refs, flowEdges(prog, inst, refs, v))
 	return flows
 }
 
@@ -97,7 +97,7 @@ func (f *interfaceFlows) propagate(fset *token.FileSet, refs *methodReferenceSca
 // of every generic object, each vector element that is an interface flowing
 // into its constraint. Constraint methods are substituted under the vector's
 // environment; a method substitution cannot make concrete carries no flow.
-func flowEdges(prog *ssa.Program, inst *instantiations, refs *methodReferenceScan) []flowEdge {
+func flowEdges(prog *ssa.Program, inst *instantiations, refs *methodReferenceScan, v view) []flowEdge {
 	var edges []flowEdge
 	seen := map[string]bool{}
 	add := func(source, target types.Type, suffix string, env map[*types.TypeParam]types.Type) {
@@ -115,14 +115,16 @@ func flowEdges(prog *ssa.Program, inst *instantiations, refs *methodReferenceSca
 	for fn := range ssautil.AllFunctions(prog) {
 		for _, block := range fn.Blocks {
 			for _, instr := range block.Instrs {
-				switch instr := instr.(type) {
+				switch conv := instr.(type) {
 				case *ssa.ChangeInterface:
-					if interfaceEndpoint(instr.X.Type()) && interfaceEndpoint(instr.Type()) {
-						add(instr.X.Type(), instr.Type(), "", nil)
+					if interfaceEndpoint(conv.X.Type()) && interfaceEndpoint(conv.Type()) &&
+						v.admitsInstruction(prog.Fset, fn, instr) {
+						add(conv.X.Type(), conv.Type(), "", nil)
 					}
 				case *ssa.ChangeType:
-					if interfaceEndpoint(instr.X.Type()) && interfaceEndpoint(instr.Type()) {
-						add(instr.X.Type(), instr.Type(), "", nil)
+					if interfaceEndpoint(conv.X.Type()) && interfaceEndpoint(conv.Type()) &&
+						v.admitsInstruction(prog.Fset, fn, instr) {
+						add(conv.X.Type(), conv.Type(), "", nil)
 					}
 				}
 			}

@@ -51,8 +51,17 @@ func Kinds() []Kind {
 }
 
 // Verdict is why a declaration was reported. The set is closed: every [Finding]
-// carries one of these, and one declaration can draw more than one.
+// carries one of these, and one declaration can draw more than one. Under
+// [Config.Tests] each verdict also exists in a test-only form — the same token
+// prefixed with "test-only" — carried by a production declaration that only
+// test code keeps alive.
 type Verdict string
+
+// testOnly derives the test-only form of the verdict, the one a declaration
+// draws when the masked view reports it and the full view does not.
+func (v Verdict) testOnly() Verdict {
+	return "test-only " + v
+}
 
 const (
 	// VerdictUnreachable is a function no path from any root reaches.
@@ -99,7 +108,9 @@ type Config struct {
 	BuildTags []string
 
 	// Tests includes test code: test binaries become call-graph roots
-	// and test-only references count as uses.
+	// and test-only references count as uses. It also turns on the second, masked
+	// evaluation behind the test-only verdict family — a production declaration
+	// that only test evidence keeps alive is reported rather than passing as live.
 	Tests bool
 
 	// API are package patterns whose exported surface consumers reach.
@@ -137,7 +148,9 @@ type Finding struct {
 // Findings arrive grouped by verdict in a stable order — unreachable functions,
 // unused exported identifiers, unused interface methods, reflection-live
 // methods, then unused exported methods — and sorted by position within each
-// group. Callers that want a single positional order must sort.
+// group. Under [Config.Tests] the same groups follow once more in their
+// test-only form, holding the production declarations only test evidence keeps
+// alive. Callers that want a single positional order must sort.
 func Analyze(ctx context.Context, cfg Config) ([]Finding, error) {
 	surface, err := newAPISurface(cfg.API, cfg.APIExempt)
 	if err != nil {
@@ -181,12 +194,7 @@ func Analyze(ctx context.Context, cfg Config) ([]Finding, error) {
 	}
 
 	facts := newFileFacts(pkgs)
-
-	// The reference scans run first: whether a type is referenced decides both
-	// which API methods stay exempt and which of them are worth rooting.
-	idents := unusedExportedIdents(pkgs, facts)
 	methodDecls := newMethodScan(pkgs, facts)
-	deadTypes := unreferencedTypes(idents, surface)
 
 	prog, ssaPkgs := ssautil.Packages(pkgs, ssa.InstantiateGenerics)
 	prog.Build()
@@ -194,16 +202,58 @@ func Analyze(ctx context.Context, cfg Config) ([]Finding, error) {
 		return nil, err
 	}
 
+	full, err := evaluate(ctx, prog, ssaPkgs, pkgs, surface, facts, methodDecls, cfg.Tests, view{})
+	if err != nil {
+		return nil, err
+	}
+	findings := make([]Finding, 0, len(full))
+	for _, decl := range full {
+		findings = append(findings, newFinding(decl))
+	}
+	if !cfg.Tests {
+		return findings, nil
+	}
+
+	// The masked view answers the same questions with test-origin evidence
+	// removed, and its failures fail the run like any other evaluation's:
+	// a program whose only entry points are tests has nothing to root at once they
+	// are set aside, and [ErrNoRoots] holds that reachability is then undefined
+	// rather than empty — an empty family would read as all clear.
+	masked, err := evaluate(ctx, prog, ssaPkgs, pkgs, surface, facts, methodDecls, false, view{masked: true})
+	if err != nil {
+		return nil, fmt.Errorf("analyzing test-only liveness: %w", err)
+	}
+	return append(findings, testOnlyFindings(full, masked)...), nil
+}
+
+// evaluate runs every verdict pass over the built program under one evidence
+// view and returns the surface-filtered findings in report order.
+func evaluate(
+	ctx context.Context,
+	prog *ssa.Program,
+	ssaPkgs []*ssa.Package,
+	pkgs []*packages.Package,
+	surface *apiSurface,
+	facts map[*packages.Package]fileFacts,
+	methodDecls *methodScan,
+	tests bool,
+	v view,
+) ([]declaration, error) {
+	// The reference scans run first: whether a type is referenced decides both
+	// which API methods stay exempt and which of them are worth rooting.
+	idents := unusedExportedIdents(pkgs, facts, v)
+	deadTypes := unreferencedTypes(idents, surface)
+
 	// Whether the program can hold a type behind an interface is evidence every
 	// credit gate needs, so it is derived once from the built program —
 	// with the generic instantiations resolved first, because reflect.TypeFor's
 	// resolved type arguments are closure seeds — and shared.
-	inst := newInstantiations(pkgs)
-	ev := newEvidence(prog, inst)
-	methodRefs := newMethodReferenceScan(pkgs, facts, ev)
-	flows := newInterfaceFlows(prog, inst, methodRefs)
-	binds := newInterfaceBindScan(prog, pkgs, methodRefs, analyzedPackages(pkgs), ev, inst, flows)
-	if err = canceled(ctx, "scanning interface binds"); err != nil {
+	inst := newInstantiations(pkgs, v)
+	ev := newEvidence(prog, inst, v)
+	methodRefs := newMethodReferenceScan(pkgs, facts, ev, v)
+	flows := newInterfaceFlows(prog, inst, methodRefs, v)
+	binds := newInterfaceBindScan(prog, pkgs, methodRefs, analyzedPackages(pkgs), ev, inst, flows, v)
+	if err := canceled(ctx, "scanning interface binds"); err != nil {
 		return nil, err
 	}
 
@@ -214,7 +264,7 @@ func Analyze(ctx context.Context, cfg Config) ([]Finding, error) {
 		return binds.bound(key) || methodRefs.dispatchCredited(key)
 	}
 
-	funcs, reach, err := unreachableFuncs(ctx, prog, ssaPkgs, pkgs, surface, deadTypes, facts, cfg.Tests, participation)
+	funcs, reach, err := unreachableFuncs(ctx, prog, ssaPkgs, pkgs, surface, deadTypes, facts, tests, v, participation)
 	if err != nil {
 		return nil, err
 	}
@@ -222,20 +272,45 @@ func Analyze(ctx context.Context, cfg Config) ([]Finding, error) {
 	reflectionMethods := unusedReflectionLiveMethods(methodDecls, reach, methodRefs, participation)
 	methods := unusedExportedMethods(methodDecls, methodRefs, reflectionMethods, participation)
 
-	var findings []Finding
+	var found []declaration
 	for _, decl := range slices.Concat(funcs, idents, interfaceMethods, reflectionMethods, methods) {
 		if surface.exempted(decl, deadTypes) {
 			continue
 		}
-		findings = append(findings, Finding{
-			Pos:     decl.pos,
-			Verdict: decl.verdict,
-			Name:    decl.name,
-			Kind:    decl.kind,
-			Package: decl.pkg,
-		})
+		found = append(found, decl)
 	}
-	return findings, nil
+	return found, nil
+}
+
+// testOnlyFindings diffs the two views by declaration: a production declaration
+// the masked view reports and the full view does not is one only test evidence
+// keeps alive, and it surfaces under its masked verdicts in their test-only
+// form. Declarations in test files are judged in the full view alone — test
+// code judging test code has no masked question to answer.
+func testOnlyFindings(full, masked []declaration) []Finding {
+	reported := make(map[string]bool, len(full))
+	for _, decl := range full {
+		reported[declKey(decl.pos)] = true
+	}
+	var findings []Finding
+	for _, decl := range masked {
+		if reported[declKey(decl.pos)] || testFile(decl.pos.Filename) {
+			continue
+		}
+		decl.verdict = decl.verdict.testOnly()
+		findings = append(findings, newFinding(decl))
+	}
+	return findings
+}
+
+func newFinding(decl declaration) Finding {
+	return Finding{
+		Pos:     decl.pos,
+		Verdict: decl.verdict,
+		Name:    decl.name,
+		Kind:    decl.kind,
+		Package: decl.pkg,
+	}
 }
 
 // canceled reports the caller's cancellation against the stage it interrupted.

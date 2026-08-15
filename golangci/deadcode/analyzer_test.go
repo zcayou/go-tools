@@ -59,6 +59,8 @@ var _ = Describe("Analyzer", func() {
 		Expect(reported).To(ConsistOf(
 			"main.go:10:6: unreachable func: Dead",
 			"main.go:10:6: unused exported func: Dead",
+			"main.go:14:6: test-only unreachable func: Tested",
+			"main.go:14:6: test-only unused exported func: Tested",
 		))
 	})
 

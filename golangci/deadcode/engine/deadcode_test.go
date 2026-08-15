@@ -173,7 +173,13 @@ var _ = Describe("Analyze", func() {
 	)
 
 	It("roots an example with no output comment, which the test main never registers", func(ctx SpecContext) {
-		Expect(analyzeWith(ctx, "tests", engine.Config{Tests: true})).To(BeEmpty())
+		// ExampleCompute and its helper draw no plain verdict — the example is rooted
+		// even though nothing registers it — while Compute, which only the example
+		// reaches, surfaces as test-only rather than passing as live.
+		Expect(analyzeWith(ctx, "tests", engine.Config{Tests: true})).To(Equal([]string{
+			"main.go:4:6: test-only unreachable func: Compute",
+			"main.go:4:6: test-only unused exported func: Compute",
+		}))
 	})
 
 	It("leaves test-only references unseen when tests are excluded", func(ctx SpecContext) {
@@ -181,6 +187,63 @@ var _ = Describe("Analyze", func() {
 			"main.go:4:6: unreachable func: Compute",
 			"main.go:4:6: unused exported func: Compute",
 		}))
+	})
+
+	Describe("test-only liveness", func() {
+		// Under tests:true every verdict is evaluated twice over the same loaded
+		// program — once with all evidence, once with test-origin evidence masked —
+		// and a production declaration reported only under the mask is what test code
+		// alone keeps alive.
+		It("reports production declarations only test evidence keeps alive", func(ctx SpecContext) {
+			Expect(analyzeWith(ctx, "testonly", engine.Config{Tests: true})).To(Equal([]string{
+				// The full view first, byte-identical to what tests:true reported before
+				// the family existed: dead test code is judged there alone, and Bark —
+				// selected by nothing in either view — keeps its plain verdict.
+				"main_test.go:19:6: unreachable func: testHelper",
+				"main.go:14:12: unused reflection-live exported method: Dog.Bark",
+				// Then the masked view's family: the interface method whose only selection
+				// sits in the test file, the implementation that selection
+				// dispatch-credited, and every ident only tests reference. TestSpeak itself
+				// — unreachable under the mask — draws nothing.
+				"main.go:11:12: test-only unreachable func: Dog.Speak",
+				"main.go:4:6: test-only unused exported type: Speaker",
+				"main.go:17:7: test-only unused exported const: Threshold",
+				"main.go:19:5: test-only unused exported var: Registry",
+				"main.go:21:6: test-only unused exported type: Mode",
+				"main.go:5:2: test-only unused interface method: Speaker.Speak",
+				"main.go:11:12: test-only unused exported method: Dog.Speak",
+			}))
+		})
+
+		It("exempts the api surface in both views, before the diff", func(ctx SpecContext) {
+			// The exempt idents draw nothing even though only tests reference them,
+			// and the api roots keep Dog.Speak reachable in the masked view — its
+			// unused-method verdict is what survives.
+			Expect(analyzeWith(ctx, "testonly", engine.Config{
+				Tests:     true,
+				API:       []string{"./..."},
+				APIExempt: []engine.Kind{engine.KindType, engine.KindConst, engine.KindVar},
+			})).To(Equal([]string{
+				"main_test.go:19:6: unreachable func: testHelper",
+				"main.go:14:12: unused exported method: Dog.Bark",
+				"main.go:5:2: test-only unused interface method: Speaker.Speak",
+				"main.go:11:12: test-only unused exported method: Dog.Speak",
+			}))
+		})
+
+		It("reports plain verdicts and no family at all when tests are excluded", func(ctx SpecContext) {
+			Expect(analyzeWith(ctx, "testonly", engine.Config{})).To(Equal([]string{
+				"main.go:11:12: unreachable func: Dog.Speak",
+				"main.go:14:12: unreachable func: Dog.Bark",
+				"main.go:4:6: unused exported type: Speaker",
+				"main.go:17:7: unused exported const: Threshold",
+				"main.go:19:5: unused exported var: Registry",
+				"main.go:21:6: unused exported type: Mode",
+				"main.go:5:2: unused interface method: Speaker.Speak",
+				"main.go:11:12: unused exported method: Dog.Speak",
+				"main.go:14:12: unused exported method: Dog.Bark",
+			}))
+		})
 	})
 
 	It("analyzes the files a build tag brings in", func(ctx SpecContext) {
@@ -297,6 +360,21 @@ var _ = Describe("Analyze", func() {
 			_, err := engine.Analyze(ctx, engine.Config{
 				Dir:      fixtureDir("noroots"),
 				Patterns: []string{"./internal/..."},
+			})
+
+			Expect(err).To(MatchError(engine.ErrNoRoots))
+		})
+
+		It("refuses a program whose only roots are tests", func(ctx SpecContext) {
+			// The full view roots at the test entries, but the masked question — what
+			// does the program need with no test vouching for it — has nothing to root
+			// at, and reachability is undefined rather than empty. An empty test-only
+			// family would read as all clear, which is the one answer this run cannot
+			// support.
+			_, err := engine.Analyze(ctx, engine.Config{
+				Dir:      fixtureDir("testrooted"),
+				Patterns: []string{"./..."},
+				Tests:    true,
 			})
 
 			Expect(err).To(MatchError(engine.ErrNoRoots))

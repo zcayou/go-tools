@@ -40,8 +40,11 @@ type Settings struct {
 	BuildTags []string `json:"build-tags"`
 
 	// Tests includes test code: test binaries become call-graph roots
-	// and test-only references count as uses. Defaults to true, matching
-	// golangci-lint's run.tests, which this cannot read.
+	// and test-only references count as uses. It also turns on the test-only
+	// verdict family — a production declaration only test code keeps alive
+	// is reported with its verdicts prefixed test-only rather than passing
+	// as live. Defaults to true, matching golangci-lint's run.tests, which this
+	// cannot read.
 	Tests *bool `json:"tests"`
 
 	// API are package patterns whose exported surface consumers reach.

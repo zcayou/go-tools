@@ -56,14 +56,20 @@ type rawInstance struct {
 }
 
 // newInstantiations reads TypesInfo.Instances from every loaded package,
-// dependencies included, and resolves parametric vectors transitively.
-func newInstantiations(loaded []*packages.Package) *instantiations {
+// dependencies included, and resolves parametric vectors transitively. Sites
+// in files the view does not admit contribute nothing, which masks
+// constraint-satisfaction credits, reflect.TypeFor closure seeds,
+// and instantiation-derived flow edges in one place.
+func newInstantiations(loaded []*packages.Package, v view) *instantiations {
 	var raw []rawInstance
 	packages.Visit(loaded, nil, func(pkg *packages.Package) {
-		if pkg.TypesInfo == nil {
+		if pkg.TypesInfo == nil || !v.admitsPackage(pkg.PkgPath) {
 			return
 		}
 		for _, file := range pkg.Syntax {
+			if !v.admitsFile(position(pkg.Fset, file.Pos()).Filename) {
+				continue
+			}
 			raw = append(raw, fileInstances(pkg, file)...)
 		}
 	})

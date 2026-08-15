@@ -43,15 +43,17 @@ type evidence struct {
 	msets   *typeutil.MethodSetCache
 }
 
-func newEvidence(prog *ssa.Program, inst *instantiations) *evidence {
+func newEvidence(prog *ssa.Program, inst *instantiations, v view) *evidence {
 	ev := &evidence{msets: &prog.MethodSets}
 	for fn := range ssautil.AllFunctions(prog) {
 		for _, block := range fn.Blocks {
 			for _, instr := range block.Instrs {
-				if conversion, ok := instr.(*ssa.MakeInterface); ok {
-					ev.addConversion(conversion.X.Type(), conversion.Type())
-					ev.derive(conversion.X.Type(), false)
+				conversion, ok := instr.(*ssa.MakeInterface)
+				if !ok || !v.admitsInstruction(prog.Fset, fn, instr) {
+					continue
 				}
+				ev.addConversion(conversion.X.Type(), conversion.Type())
+				ev.derive(conversion.X.Type(), false)
 			}
 		}
 	}

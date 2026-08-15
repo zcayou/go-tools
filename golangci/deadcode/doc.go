@@ -72,6 +72,11 @@
 // tags and test inclusion are settings on this linter rather than inherited
 // from run.build-tags and run.tests.
 //
+// Including tests — the default — additionally reports the engine's test-only
+// verdict family: a production declaration that only test code keeps alive
+// carries its verdicts prefixed test-only, and one exclusion matching
+// that prefix silences the family. Excluding tests behaves exactly as before.
+//
 // An absent key and an empty list mean different things. Omitting patterns
 // analyzes the whole module; writing patterns: [] names no packages at all
 // and is rejected rather than quietly read as the default.

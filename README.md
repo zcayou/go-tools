@@ -94,9 +94,25 @@ linters:
         settings:
           patterns: ['./...']      # absent means ./... from the module root
           build-tags: [integration]
-          tests: true              # default; matches run.tests
+          tests: true              # default; matches run.tests, and reports the test-only family
           api: ['./pkg/...']       # package patterns whose exported surface consumers reach
           api-exempt: [method]     # default when api is set
+```
+
+With `tests: true`, production code that only test code keeps alive is
+reported as a finding family of its own: every verdict has a `test-only` form
+(`test-only unreachable func: Compute`, `test-only unused exported method:
+Runtime.Program`, …), drawn by a declaration the analysis reports once
+test-origin evidence is set aside. Code declared in `_test.go` files never
+draws one — the family is about production declarations whose only consumers
+are their tests. Silence the whole family with one exclusion on the prefix:
+
+```yaml
+linters:
+  exclusions:
+    rules:
+      - linters: [deadcode]
+        text: '^test-only '
 ```
 
 Two settings that need care:

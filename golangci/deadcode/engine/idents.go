@@ -4,7 +4,6 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
-	"strings"
 
 	"golang.org/x/tools/go/packages"
 )
@@ -17,11 +16,12 @@ type identScan struct {
 }
 
 // unusedExportedIdents reports exported package-level types, constants,
-// variables, and functions with no reference anywhere in the loaded packages.
-// Functions are covered here rather than by reachability alone because
-// a function that is a call-graph root is reachable by construction; only
-// a reference scan can tell that nothing calls it.
-func unusedExportedIdents(pkgs []*packages.Package, facts map[*packages.Package]fileFacts) []declaration {
+// variables, and functions with no reference the view admits anywhere
+// in the loaded packages. Functions are covered here rather than
+// by reachability alone because a function that is a call-graph root
+// is reachable by construction; only a reference scan can tell that nothing
+// calls it.
+func unusedExportedIdents(pkgs []*packages.Package, facts map[*packages.Package]fileFacts, v view) []declaration {
 	scan := &identScan{
 		declared:   map[string]declaration{},
 		uses:       map[string][]token.Position{},
@@ -29,7 +29,7 @@ func unusedExportedIdents(pkgs []*packages.Package, facts map[*packages.Package]
 		blankSpans: spanIndex{},
 	}
 	for _, pkg := range pkgs {
-		scan.addPackage(pkg, facts[pkg])
+		scan.addPackage(pkg, facts[pkg], v)
 	}
 
 	var unused []declaration
@@ -57,9 +57,9 @@ func unreferencedTypes(idents []declaration, surface *apiSurface) map[string]boo
 	return dead
 }
 
-func (s *identScan) addPackage(pkg *packages.Package, facts fileFacts) {
+func (s *identScan) addPackage(pkg *packages.Package, facts fileFacts, v view) {
 	s.addDeclarations(pkg, facts)
-	s.addUses(pkg)
+	s.addUses(pkg, v)
 	s.addSpans(pkg)
 }
 
@@ -89,7 +89,7 @@ func (s *identScan) addDeclarations(pkg *packages.Package, facts fileFacts) {
 			continue
 		}
 		pos := position(fset, obj.Pos())
-		if strings.HasSuffix(pos.Filename, "_test.go") || facts.generated[pos.Filename] {
+		if testFile(pos.Filename) || facts.generated[pos.Filename] {
 			continue
 		}
 		if kind == KindFunc && facts.linknamed[name] {
@@ -103,16 +103,24 @@ func (s *identScan) addDeclarations(pkg *packages.Package, facts fileFacts) {
 
 }
 
-// addUses records every reference to an exported package-level declaration.
-func (s *identScan) addUses(pkg *packages.Package) {
+// addUses records every reference to an exported package-level declaration
+// that the view admits.
+func (s *identScan) addUses(pkg *packages.Package, v view) {
+	if !v.admitsPackage(pkg.PkgPath) {
+		return
+	}
 	fset := pkg.Fset
 
 	for ident, obj := range pkg.TypesInfo.Uses {
 		if !obj.Exported() || obj.Pkg() == nil || obj.Parent() != obj.Pkg().Scope() {
 			continue
 		}
+		pos := position(fset, ident.Pos())
+		if !v.admitsFile(pos.Filename) {
+			continue
+		}
 		key := declKey(position(fset, obj.Pos()))
-		s.uses[key] = append(s.uses[key], position(fset, ident.Pos()))
+		s.uses[key] = append(s.uses[key], pos)
 	}
 }
 

@@ -4,7 +4,6 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
-	"strings"
 
 	"golang.org/x/tools/go/packages"
 )
@@ -63,7 +62,7 @@ func (s *methodScan) addPackage(pkg *packages.Package, facts fileFacts) {
 				continue
 			}
 			pos := position(pkg.Fset, obj.Pos())
-			if strings.HasSuffix(pos.Filename, "_test.go") || facts.generated[pos.Filename] {
+			if testFile(pos.Filename) || facts.generated[pos.Filename] {
 				continue
 			}
 			recv := receiverBase(funcDecl.Recv.List[0].Type)
@@ -84,6 +83,7 @@ func newMethodReferenceScan(
 	pkgs []*packages.Package,
 	facts map[*packages.Package]fileFacts,
 	ev *evidence,
+	v view,
 ) *methodReferenceScan {
 	scan := &methodReferenceScan{
 		interfaceMethods:      map[string]declaration{},
@@ -100,7 +100,7 @@ func newMethodReferenceScan(
 		scan.addPackageDeclarations(pkg, facts[pkg])
 	}
 	for _, pkg := range pkgs {
-		scan.addPackageUses(pkg)
+		scan.addPackageUses(pkg, v)
 	}
 	return scan
 }
@@ -134,7 +134,11 @@ func (s *methodReferenceScan) addPackageDeclarations(pkg *packages.Package, fact
 	}
 }
 
-func (s *methodReferenceScan) addPackageUses(pkg *packages.Package) {
+// addPackageUses records the method selections the view admits.
+func (s *methodReferenceScan) addPackageUses(pkg *packages.Package, v view) {
+	if !v.admitsPackage(pkg.PkgPath) {
+		return
+	}
 	fset := pkg.Fset
 	for selector, selection := range pkg.TypesInfo.Selections {
 		if selection.Kind() != types.MethodVal && selection.Kind() != types.MethodExpr {
@@ -144,8 +148,11 @@ func (s *methodReferenceScan) addPackageUses(pkg *packages.Package) {
 		if obj == nil || obj.Pkg() == nil {
 			continue
 		}
-		key := declKey(position(fset, obj.Pos()))
 		pos := position(fset, selector.Sel.Pos())
+		if !v.admitsFile(pos.Filename) {
+			continue
+		}
+		key := declKey(position(fset, obj.Pos()))
 		if _, ok := s.interfaceMethods[key]; ok {
 			s.interfaceMethodUses[key] = append(s.interfaceMethodUses[key], pos)
 		} else {
@@ -200,7 +207,7 @@ func (s *methodReferenceScan) addInterfaceMethods(pkg *packages.Package, decl *a
 					continue
 				}
 				pos := position(pkg.Fset, obj.Pos())
-				if strings.HasSuffix(pos.Filename, "_test.go") || generated[pos.Filename] {
+				if testFile(pos.Filename) || generated[pos.Filename] {
 					continue
 				}
 				key := declKey(pos)
