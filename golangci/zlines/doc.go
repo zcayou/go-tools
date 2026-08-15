@@ -18,7 +18,8 @@
 //     fits inside the limit on one.
 //   - body-collapse: a function body is written on the line its signature ends
 //     on rather than lines of its own.
-//   - comment-wrap: a comment paragraph is not filled to the comment limit.
+//   - comment-wrap: a comment paragraph breaks a line outside the band its
+//     settings draw.
 //
 // # What counts as the line
 //
@@ -78,13 +79,23 @@
 //
 // # Filling a comment
 //
-// A comment paragraph is filled greedily to comment-length, and the fix writes
-// the line breaks that gives it. The line breaks inside a paragraph are taken
-// to carry nothing, because the break that carries something is the blank
-// //-line: it ends the paragraph, and no fill ever runs across one. Width
-// is counted the way "What counts as the line" counts it, so a comment nested
-// several tabs deep fills to the limit in characters and lands past
-// it in columns.
+// A comment line may stop anywhere between comment-min-length
+// and comment-length, and a paragraph whose breaks all land inside that band
+// is left alone however far they sit from the ones a fill would choose — which
+// is what keeps one edited word from rewrapping every line below it. A line
+// past the limit is reported unless it is a single word with nowhere to break,
+// and a line short of the minimum is reported only while the line below opens
+// with something it could still have taken: a break the words force stands,
+// however short it leaves the line. The last line of a paragraph only holds
+// the remainder, so no minimum applies to it.
+//
+// The fix fills the paragraph greedily to comment-length and writes the line
+// breaks that gives it, so the accepted forms are many but the fixed one
+// is always the same. The line breaks inside a paragraph are taken to carry
+// nothing, because the break that carries something is the blank //-line:
+// it ends the paragraph, and no fill ever runs across one. Width is counted
+// the way "What counts as the line" counts it, so a comment nested several
+// tabs deep fills to the limit in characters and lands past it in columns.
 //
 // The rule reads only // comments that nothing but whitespace precedes on their
 // line. A comment sitting after code is a remark about that code and cannot
@@ -128,7 +139,10 @@
 // it to what follows — an article, a preposition, a conjunction. Filling
 // greedily would carry such a word up to the margin and strand it there, so
 // it goes down to the word it belongs with instead, and the line comes out
-// shorter than the limit would allow. Nothing else about the fill
+// shorter than the limit would allow. The band does not loosen this: a break
+// after such a word is reported at any width, except where no line below
+// could hold it beside the word it belongs with, which is the one place
+// the fill leaves such a break itself. Nothing else about the fill
 // is negotiable: a word too wide for the limit still takes a line of its own
 // and overruns it, there being nowhere to break it.
 //
@@ -138,9 +152,11 @@
 // defaults to [DefaultLineLength]. Comments are filled to comment-length
 // instead, which defaults to [DefaultCommentLength]: prose and code are wrapped
 // to different measures for different reasons, and a repository that holds code
-// to 120 columns rarely wants its sentences that wide. Every rule is enforced
-// unless a repository says otherwise, and each has a key of its own to say
-// it with:
+// to 120 columns rarely wants its sentences that wide. The band's lower edge
+// is comment-min-length, which an absent key derives as [DefaultCommentSlack]
+// short of the length so that one key moves both edges; a minimum equal
+// to the length asks for the exact fill back. Every rule is enforced unless
+// a repository says otherwise, and each has a key of its own to say it with:
 //
 //	settings:
 //	  custom:
@@ -149,6 +165,7 @@
 //	      settings:
 //	        line-length: 160
 //	        comment-length: 80
+//	        comment-min-length: 70
 //	        signature-wrap: false
 //	        body-collapse: false
 //	        comment-wrap: false

@@ -36,6 +36,12 @@ const (
 		"// +kubebuilder:validation:Required\n" +
 		"// and a line of prose under it\n" +
 		"type marked struct{}\n"
+
+	inBandComment = "package p\n" +
+		"\n" +
+		"// the band tolerates a break placed anywhere inside it, so editing one word\n" +
+		"// did not cascade a rewrap through the paragraph.\n" +
+		"type banded struct{}\n"
 )
 
 var _ = Describe("Plugin", func() {
@@ -70,6 +76,13 @@ var _ = Describe("Plugin", func() {
 		Expect(analyze(analyzerFrom(settings), shortComment).messages()).To(BeEmpty())
 	})
 
+	It("takes the comment minimum from the settings block", func() {
+		settings := map[string]any{"comment-min-length": 80}
+
+		Expect(analyze(analyzerFrom(nil), inBandComment).messages()).To(BeEmpty())
+		Expect(analyze(analyzerFrom(settings), inBandComment).messages()).To(HaveLen(1))
+	})
+
 	It("takes the comment-wrap rule out of the run when asked to", func() {
 		Expect(analyze(analyzerFrom(map[string]any{"comment-wrap": false}), shortComment).messages()).
 			To(BeEmpty())
@@ -84,22 +97,24 @@ var _ = Describe("Plugin", func() {
 
 	It("decodes every documented key onto the field it belongs to", func() {
 		settings, err := register.DecodeSettings[zlines.Settings](map[string]any{
-			"line-length":    160,
-			"comment-length": 80,
-			"signature-wrap": false,
-			"body-collapse":  false,
-			"comment-wrap":   false,
-			"comment-exempt": []string{"+kubebuilder"},
+			"line-length":        160,
+			"comment-length":     80,
+			"comment-min-length": 70,
+			"signature-wrap":     false,
+			"body-collapse":      false,
+			"comment-wrap":       false,
+			"comment-exempt":     []string{"+kubebuilder"},
 		})
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(settings).To(Equal(zlines.Settings{
-			LineLength:    new(160),
-			CommentLength: new(80),
-			SignatureWrap: new(false),
-			BodyCollapse:  new(false),
-			CommentWrap:   new(false),
-			CommentExempt: []string{"+kubebuilder"},
+			LineLength:       new(160),
+			CommentLength:    new(80),
+			CommentMinLength: new(70),
+			SignatureWrap:    new(false),
+			BodyCollapse:     new(false),
+			CommentWrap:      new(false),
+			CommentExempt:    []string{"+kubebuilder"},
 		}))
 	})
 
@@ -113,6 +128,18 @@ var _ = Describe("Plugin", func() {
 		_, err := zlines.New(map[string]any{"comment-length": 0})
 
 		Expect(err).To(MatchError(ContainSubstring("comment-length must be positive")))
+	})
+
+	It("rejects a comment minimum of zero rather than defaulting it", func() {
+		_, err := zlines.New(map[string]any{"comment-min-length": 0})
+
+		Expect(err).To(MatchError(ContainSubstring("comment-min-length must be positive")))
+	})
+
+	It("rejects a comment minimum past the length, a band nothing could satisfy", func() {
+		_, err := zlines.New(map[string]any{"comment-length": 80, "comment-min-length": 90})
+
+		Expect(err).To(MatchError(ContainSubstring("comment-min-length 90 exceeds comment-length 80")))
 	})
 
 	It("rejects an unknown settings key rather than ignoring it", func() {

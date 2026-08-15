@@ -83,7 +83,7 @@ func trailing() {
 
 // Greedy alone would close the first line below on "the", at 77 columns.
 
-// want +2 `comment-wrap: comment is wrapped short of the 80-column limit`
+// want +2 `comment-wrap: comment is wrapped short of the 70-column minimum`
 
 // Centralizing the checks keeps them consistent across tiers and absorbs
 // the variation in the output shapes.

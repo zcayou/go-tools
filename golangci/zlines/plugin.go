@@ -25,6 +25,12 @@ const DefaultLineLength = 120
 // wraps its doc comments, and where Go repositories tend to land unprompted.
 const DefaultCommentLength = 80
 
+// DefaultCommentSlack is how far short of the comment length a line may stop
+// when comment-min-length is left out. Deriving the minimum keeps the band
+// following whatever length a repository configures, so one key moves both
+// of its edges.
+const DefaultCommentSlack = 10
+
 // Settings is the decoded linters.settings.custom.zlines.settings block.
 //
 // Decoding rejects unknown fields, so a misspelled key fails the run rather
@@ -43,6 +49,15 @@ type Settings struct {
 	// to different measures, for different reasons, and a repository that holds
 	// code to 120 rarely wants its sentences that wide.
 	CommentLength *int `json:"comment-length"`
+
+	// CommentMinLength is the width a comment line may stop short at without being
+	// reported, the lower edge of the band CommentLength closes. Inside the band
+	// line breaks are free, which is what keeps one edited word from rewrapping
+	// a whole paragraph; below it a line that could still absorb the next word
+	// is reported. An absent key derives the minimum as [DefaultCommentSlack]
+	// short of the comment length, and a minimum equal to CommentLength asks
+	// for the exact fill back.
+	CommentMinLength *int `json:"comment-min-length"`
 
 	// SignatureWrap says whether the signature-wrap rule is enforced. An absent
 	// key enforces it, so turning the rule off is something a repository has
@@ -99,6 +114,16 @@ func (s Settings) commentLength() int {
 	return *s.CommentLength
 }
 
+// commentMinLength is the width a comment line may stop short at, which
+// an unset setting derives from the comment length in force.
+func (s Settings) commentMinLength() int {
+	if s.CommentMinLength == nil {
+		return max(1, s.commentLength()-DefaultCommentSlack)
+	}
+
+	return *s.CommentMinLength
+}
+
 // signatureWrap reports whether the signature-wrap rule is enforced, which
 // an unset setting leaves on.
 func (s Settings) signatureWrap() bool {
@@ -138,6 +163,14 @@ func New(settings any) (register.LinterPlugin, error) {
 	}
 	if s.CommentLength != nil && *s.CommentLength <= 0 {
 		return nil, fmt.Errorf("%s: comment-length must be positive, got %d", Name, *s.CommentLength)
+	}
+	if s.CommentMinLength != nil && *s.CommentMinLength <= 0 {
+		return nil, fmt.Errorf("%s: comment-min-length must be positive, got %d", Name, *s.CommentMinLength)
+	}
+	// A minimum past the length is a band no paragraph could sit inside.
+	if s.CommentMinLength != nil && *s.CommentMinLength > s.commentLength() {
+		return nil, fmt.Errorf("%s: comment-min-length %d exceeds comment-length %d",
+			Name, *s.CommentMinLength, s.commentLength())
 	}
 	// Every string opens with the empty prefix, so listing it would exempt every
 	// comment there is and leave comment-wrap enforced but silent.

@@ -290,6 +290,77 @@ func fill(first, rest, limit int, words []string) []string {
 	return lines
 }
 
+// breach names the band rule a paragraph's line broke, which is what
+// the diagnostic names when the fill does not change the line count.
+type breach int
+
+const (
+	// held means every line conforms and the paragraph draws nothing.
+	held breach = iota
+	// overrun is a line past the comment limit with a break available.
+	overrun
+	// stranded is a line ending on a word that belongs with the line below.
+	stranded
+	// underfilled is a line short of the minimum that could still absorb the next
+	// word.
+	underfilled
+)
+
+// banded reports the first band rule one of the paragraph's lines breaks,
+// counting each width the way fill counts one. The last line only holds
+// the remainder, so nothing but the limit applies to it, and a single word
+// wider than the limit has nowhere to break and stands wherever it is.
+func (p paragraph) banded(first, rest, minimum, limit int) breach {
+	for i, line := range p.lines {
+		carried := rest
+		if i == 0 {
+			carried = first
+		}
+
+		width := carried + utf8.RuneCountInString(line)
+		if width > limit {
+			if len(strings.Fields(line)) > 1 {
+				return overrun
+			}
+
+			continue
+		}
+		if i == len(p.lines)-1 {
+			continue
+		}
+
+		next := strings.Fields(p.lines[i+1])
+		if len(next) == 0 {
+			continue
+		}
+		if _, _, ok := demote(line, next[0], rest, limit); ok {
+			return stranded
+		}
+		if width < minimum && width+1+utf8.RuneCountInString(opening(next)) <= limit {
+			return underfilled
+		}
+	}
+
+	return held
+}
+
+// opening returns the least a line above could absorb from the words below it:
+// the dangling words the line opens with, together with the first word
+// that is not one. The bare first word would be too strict a test — greedy
+// hands a lone dangling word straight back through demote, so a line the fill
+// closed that way could never satisfy it.
+func opening(words []string) string {
+	n := 0
+	for n < len(words) && dangling[strings.ToLower(words[n])] {
+		n++
+	}
+	if n < len(words) {
+		n++
+	}
+
+	return strings.Join(words[:n], " ")
+}
+
 // demote splits a full line into what it keeps and the run of dangling words
 // at its end that should go down with next instead of closing the line.
 // It reports false when there is nothing to move, when moving would leave

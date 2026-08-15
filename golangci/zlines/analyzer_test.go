@@ -22,6 +22,15 @@ import (
 // off and keeps each fixture about the rule it is named for.
 var quiet = zlines.Settings{CommentWrap: new(false)}
 
+// bandedComment breaks inside the band a comment length of 30 derives: its
+// first line stops at 24 columns, in the 20-to-30 band, though the next word
+// would still fit on it.
+const bandedComment = "package p\n" +
+	"\n" +
+	"// alpha beta gamma sums\n" +
+	"// zeta eta theta\n" +
+	"type banded struct{}\n"
+
 var _ = Describe("Analyzer", func() {
 	It("is named for the linter", func() {
 		Expect(zlines.NewAnalyzer(zlines.Settings{}).Name).To(Equal(zlines.Name))
@@ -83,6 +92,23 @@ var _ = Describe("Analyzer", func() {
 		Expect(edits(results)).To(ContainElement(
 			"// a field comment written over three short lines whose words still need two" +
 				"\n\t// lines once they are filled to the limit"))
+	})
+
+	It("tolerates breaks inside the band, and polices its edges", func() {
+		analysistest.RunWithSuggestedFixes(GinkgoT(), analysistest.TestData(),
+			zlines.NewAnalyzer(zlines.Settings{}), "banded")
+	})
+
+	It("derives the minimum from the comment length, ten columns under it", func() {
+		Expect(analyze(zlines.NewAnalyzer(zlines.Settings{CommentLength: new(30)}), bandedComment).messages()).
+			To(BeEmpty())
+	})
+
+	It("restores the exact fill when the minimum meets the length", func() {
+		analyzer := zlines.NewAnalyzer(zlines.Settings{CommentLength: new(30), CommentMinLength: new(30)})
+
+		Expect(analyze(analyzer, bandedComment).messages()).To(ConsistOf(string(zlines.RuleCommentWrap) +
+			": comment is wrapped short of the 30-column minimum"))
 	})
 
 	It("says a comment splits rather than gathers when that is what filling it does", func() {
@@ -174,7 +200,12 @@ var _ = Describe("Analyzer", func() {
 			"\r\n" +
 			"func second() {}\r\n"
 
-		fixed := analyze(zlines.NewAnalyzer(zlines.Settings{CommentLength: new(20)}), src).fixed()
+		// The minimum is pinned to the length because the comment's first line sits
+		// inside the derived band, and this spec is about line terminators.
+		fixed := analyze(zlines.NewAnalyzer(zlines.Settings{
+			CommentLength:    new(20),
+			CommentMinLength: new(20),
+		}), src).fixed()
 
 		Expect(fixed).To(Equal("package p\r\n" +
 			"\r\n" +

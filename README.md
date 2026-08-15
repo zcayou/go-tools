@@ -53,9 +53,9 @@ they overlap under the default settings.
 
 Three rules, all fixable with `--fix`: `signature-wrap` (a signature spread
 over lines that would fit on one), `body-collapse` (a body written on the line
-its signature ends on), and `comment-wrap` (comment paragraphs not filled to
-the limit). Fixes are only offered when gofmt agrees with the result, so
-running the formatter afterwards cannot undo them.
+its signature ends on), and `comment-wrap` (a comment paragraph breaking a
+line outside the band its settings draw). Fixes are only offered when gofmt
+agrees with the result, so running the formatter afterwards cannot undo them.
 
 ```yaml
 linters:
@@ -66,6 +66,7 @@ linters:
         settings:
           line-length: 160        # default 120, matching lll
           comment-length: 80      # default 80
+          comment-min-length: 70  # default: 10 under comment-length
           signature-wrap: false   # default true
           body-collapse: false    # default true
           comment-wrap: false     # default true
@@ -75,6 +76,13 @@ linters:
 Set `line-length` to the limit the repository already enforces; it governs
 `signature-wrap` only. `comment-exempt` lists prefixes marking comment lines
 meant for a tool rather than a reader — those lines stay where they are.
+
+Comment lines may stop anywhere between `comment-min-length` and
+`comment-length`, so editing one word mid-paragraph does not rewrap every line
+below it; a line short of the minimum is reported only when the next word
+would still have fit, and a break after a joining word ("the", "of") is
+reported at any width. Setting the minimum equal to the length restores the
+exact greedy fill.
 
 ### deadcode
 

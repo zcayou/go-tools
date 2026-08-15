@@ -6,7 +6,6 @@ import (
 	"go/ast"
 	"go/token"
 	"os"
-	"slices"
 	"unicode/utf8"
 
 	"golang.org/x/tools/go/analysis"
@@ -29,8 +28,10 @@ const RuleSignatureWrap Rule = "signature-wrap"
 // to find code.
 const RuleBodyCollapse Rule = "body-collapse"
 
-// RuleCommentWrap fires on a comment paragraph whose line breaks are not
-// the ones filling it to the comment limit would give it.
+// RuleCommentWrap fires on a comment paragraph with a line outside the band
+// the comment settings draw — past the limit, short of the minimum while
+// the next word would still fit — or ending on a word that belongs
+// with the line below.
 const RuleCommentWrap Rule = "comment-wrap"
 
 const analyzerDoc = `checks for line breaks a declaration should not have, and line breaks it should
@@ -38,20 +39,22 @@ const analyzerDoc = `checks for line breaks a declaration should not have, and l
 A function signature spread over several lines that would fit within the
 configured line length on one is reported, with a fix that joins it. A function
 body written on the line its signature ends on is reported whatever the line
-length, with a fix that puts it on lines of its own. A comment paragraph whose
-lines are not filled to the comment length is reported, with a fix that fills
-them.`
+length, with a fix that puts it on lines of its own. A comment paragraph with
+a line outside the band between the comment minimum and the comment length, or
+with a line ending on a word that belongs with the next, is reported with a fix
+that fills it.`
 
 // NewAnalyzer builds the analyzer that enforces the line-break conventions
 // under settings.
 func NewAnalyzer(settings Settings) *analysis.Analyzer {
 	c := &checker{
-		lineLength:    settings.lineLength(),
-		commentLength: settings.commentLength(),
-		signatureWrap: settings.signatureWrap(),
-		bodyCollapse:  settings.bodyCollapse(),
-		commentWrap:   settings.commentWrap(),
-		commentExempt: settings.commentExempt(),
+		lineLength:       settings.lineLength(),
+		commentLength:    settings.commentLength(),
+		commentMinLength: settings.commentMinLength(),
+		signatureWrap:    settings.signatureWrap(),
+		bodyCollapse:     settings.bodyCollapse(),
+		commentWrap:      settings.commentWrap(),
+		commentExempt:    settings.commentExempt(),
 	}
 
 	return &analysis.Analyzer{
@@ -62,12 +65,13 @@ func NewAnalyzer(settings Settings) *analysis.Analyzer {
 }
 
 type checker struct {
-	lineLength    int
-	commentLength int
-	signatureWrap bool
-	bodyCollapse  bool
-	commentWrap   bool
-	commentExempt []string
+	lineLength       int
+	commentLength    int
+	commentMinLength int
+	signatureWrap    bool
+	bodyCollapse     bool
+	commentWrap      bool
+	commentExempt    []string
 }
 
 func (c *checker) run(pass *analysis.Pass) (any, error) {
@@ -164,27 +168,30 @@ func (c *checker) checkBody(pass *analysis.Pass, src []byte, file *token.File, d
 	pass.Report(diagnostic)
 }
 
-// checkComments reports every comment paragraph whose line breaks are not
-// the ones filling it would give it.
+// checkComments reports every comment paragraph with a line the band does not
+// admit, filling the whole paragraph to the limit as the fix.
 func (c *checker) checkComments(pass *analysis.Pass, src []byte, file *token.File, syntax *ast.File, newline string) {
 	for _, group := range syntax.Comments {
 		for _, para := range paragraphs(src, file, group, c.commentExempt) {
 			carried := utf8.RuneCountInString(para.indent) + len("//")
+			first := carried + utf8.RuneCountInString(para.lead)
+			rest := carried + utf8.RuneCountInString(para.hang)
 
-			filled := fill(carried+utf8.RuneCountInString(para.lead),
-				carried+utf8.RuneCountInString(para.hang), c.commentLength, para.words())
-			if slices.Equal(filled, para.lines) {
+			broke := para.banded(first, rest, c.commentMinLength, c.commentLength)
+			if broke == held {
 				continue
 			}
 
+			filled := fill(first, rest, c.commentLength, para.words())
+
 			// A fill that changes the line count says so either way, since it can split
 			// a paragraph as well as gather one; the same count means the words moved
-			// but the shape did not.
+			// but the shape did not, and the message names what put a line out
+			// of the band instead.
 			message := fmt.Sprintf("%s: comment wraps over %d lines; filled to %d columns it takes %d",
 				RuleCommentWrap, len(para.lines), c.commentLength, len(filled))
 			if len(filled) == len(para.lines) {
-				message = fmt.Sprintf("%s: comment is wrapped short of the %d-column limit",
-					RuleCommentWrap, c.commentLength)
+				message = c.bandMessage(broke)
 			}
 
 			pass.Report(analysis.Diagnostic{
@@ -202,6 +209,20 @@ func (c *checker) checkComments(pass *analysis.Pass, src []byte, file *token.Fil
 				}},
 			})
 		}
+	}
+}
+
+// bandMessage says what put a line out of the band when the fill does not
+// change the paragraph's line count.
+func (c *checker) bandMessage(broke breach) string {
+	switch broke {
+	case overrun:
+		return fmt.Sprintf("%s: comment runs past the %d-column limit", RuleCommentWrap, c.commentLength)
+	case stranded:
+		return fmt.Sprintf("%s: comment breaks after a word that belongs with the line below", RuleCommentWrap)
+	default:
+		return fmt.Sprintf("%s: comment is wrapped short of the %d-column minimum",
+			RuleCommentWrap, c.commentMinLength)
 	}
 }
 
