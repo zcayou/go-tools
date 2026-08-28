@@ -26,6 +26,10 @@ var _ = Describe("Plugin", func() {
 			"api":        []string{"./pkg/..."},
 			"api-exempt": []string{"method", "func", "type", "const", "var", "interface-method"},
 		}),
+		Entry("api with a generic rooting", map[string]any{
+			"api":          []string{"./pkg/..."},
+			"api-generics": "instantiated",
+		}),
 		Entry("test-facing under the default tests", map[string]any{"test-facing": []string{"./plugins/test/..."}}),
 		Entry("roots", map[string]any{"roots": []string{"tools/*.go"}}),
 	)
@@ -45,6 +49,11 @@ var _ = Describe("Plugin", func() {
 		Entry("an unknown exemption",
 			map[string]any{"api": []string{"./..."}, "api-exempt": []string{"nonsense"}},
 			`unknown api-exempt "nonsense"`),
+		Entry("a generic rooting with nothing to root",
+			map[string]any{"api-generics": "instantiated"}, "api-generics requires api"),
+		Entry("an unknown generic rooting",
+			map[string]any{"api": []string{"./..."}, "api-generics": "monomorphized"},
+			`unknown api-generics "monomorphized"`),
 		Entry("test-facing with the masked view it speaks to turned off",
 			map[string]any{"tests": false, "test-facing": []string{"./plugins/test/..."}},
 			"test-facing requires tests"),

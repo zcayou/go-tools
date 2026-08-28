@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"slices"
@@ -10,18 +11,24 @@ import (
 )
 
 // apiSurface is the declared public API: the packages whose exported surface
-// consumers reach, and the declaration kinds that surface exempts. An exempt
-// declaration is still a call-graph root, so what it alone reaches stays live.
+// consumers reach, the declaration kinds that surface exempts, and how its
+// generic declarations are rooted. An exempt declaration is still a call-graph
+// root, so what it alone reaches stays live.
 type apiSurface struct {
 	patterns []string
 	packages map[string]bool
 	exempts  map[Kind]bool
+	generics GenericRooting
 }
 
-// newAPISurface validates the declared surface. Exemptions without patterns
-// are rejected rather than silently ignored: nothing would be exempt, so
-// the caller asked for something it is not getting.
-func newAPISurface(patterns []string, exempts []Kind) (*apiSurface, error) {
+// newAPISurface validates the declared surface. Exemptions and a generic
+// rooting without patterns are rejected rather than silently ignored: nothing
+// would be exempt and nothing would be rooted, so the caller asked
+// for something it is not getting.
+func newAPISurface(patterns []string, exempts []Kind, generics GenericRooting) (*apiSurface, error) {
+	if generics != "" && !slices.Contains(GenericRootings(), generics) {
+		return nil, fmt.Errorf("unknown api generic rooting %q: want one of %s", generics, rootingList())
+	}
 	surface := &apiSurface{exempts: map[Kind]bool{}}
 	for _, pattern := range patterns {
 		if pattern = strings.TrimSpace(pattern); pattern != "" {
@@ -34,10 +41,35 @@ func newAPISurface(patterns []string, exempts []Kind) (*apiSurface, error) {
 		}
 		surface.exempts[exempt] = true
 	}
-	if len(surface.patterns) == 0 && len(surface.exempts) > 0 {
-		return nil, errors.New("api exemptions require api patterns")
+	if len(surface.patterns) == 0 {
+		if len(surface.exempts) > 0 {
+			return nil, errors.New("api exemptions require api patterns")
+		}
+		if generics != "" && generics != GenericRootingSkip {
+			return nil, errors.New("api generic rooting requires api patterns")
+		}
+		surface.generics = GenericRootingSkip
+		return surface, nil
 	}
+	// A declared surface that is generic is the case this exists for, so measuring
+	// it is what an unset rooting asks for. Under skip the analysis roots none
+	// of it, which is a claim the run cannot support and reports as dead code.
+	surface.generics = cmp.Or(generics, GenericRootingInstantiated)
 	return surface, nil
+}
+
+// rootsInstantiations reports whether the surface's generic declarations enter
+// the root set through the instantiations the program builds of them.
+func (s *apiSurface) rootsInstantiations() bool {
+	return s.generics == GenericRootingInstantiated
+}
+
+func rootingList() string {
+	names := make([]string, 0, len(GenericRootings()))
+	for _, rooting := range GenericRootings() {
+		names = append(names, string(rooting))
+	}
+	return strings.Join(names, ", ")
 }
 
 func kindList() string {

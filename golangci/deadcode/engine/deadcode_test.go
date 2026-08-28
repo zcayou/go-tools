@@ -464,6 +464,98 @@ var _ = Describe("Analyze", func() {
 			}))
 		})
 
+		Describe("a generic surface", func() {
+			// The fixture is a library whose only way in is generic, so the exported
+			// non-generic Describe is all the masked view can root without help.
+			generic := func(rooting engine.GenericRooting) engine.Config {
+				return engine.Config{
+					Tests:       true,
+					API:         []string{"./..."},
+					APIExempt:   []engine.Kind{engine.KindMethod, engine.KindFunc, engine.KindType},
+					APIGenerics: rooting,
+				}
+			}
+
+			It("leaves what a generic API alone reaches unrooted by default", func(ctx SpecContext) {
+				Expect(analyzeWith(ctx, "apigenerics", generic(engine.GenericRootingSkip))).To(Equal([]string{
+					"lib/lib.go:55:6: unreachable func: rareHelper",
+					"lib/lib.go:63:6: unreachable func: orphan",
+					"lib/lib.go:33:6: test-only unreachable func: retain",
+					"lib/lib.go:35:6: test-only unreachable func: prepare",
+					"lib/lib.go:37:6: test-only unreachable func: observe",
+					"lib/lib.go:45:6: test-only unreachable func: auditHelper",
+				}))
+			})
+
+			It("roots the instantiations the program builds of it", func(ctx SpecContext) {
+				// Only the test instantiates, and it is masked, so this is also the claim
+				// that instantiations are gathered from the whole program.
+				Expect(analyzeWith(ctx, "apigenerics", generic(engine.GenericRootingInstantiated))).To(Equal([]string{
+					"lib/lib.go:63:6: unreachable func: orphan",
+					"lib/lib.go:60:6: unmeasured exported generic: Opaque",
+					"lib/lib.go:45:6: test-only unreachable func: auditHelper",
+				}))
+			})
+
+			It("measures the generic surface when the rooting is left unset", func(ctx SpecContext) {
+				// A declared surface that is generic is what the setting exists for, so
+				// an absent one asks to measure it rather than to report it as dead.
+				Expect(analyzeWith(ctx, "apigenerics", engine.Config{
+					Tests:     true,
+					API:       []string{"./..."},
+					APIExempt: []engine.Kind{engine.KindMethod, engine.KindFunc, engine.KindType},
+				})).To(Equal(analyzeWith(ctx, "apigenerics", generic(engine.GenericRootingInstantiated))))
+			})
+
+			It("roots a generic nothing instantiates through the calls its body makes", func(ctx SpecContext) {
+				// Rare is never instantiated, so no monomorphized body exists. Its origin
+				// body calls rareHelper, and it calls it whatever a consumer would
+				// instantiate it with, so rareHelper is reachable rather than dead.
+				Expect(analyzeWith(ctx, "apigenerics", generic(engine.GenericRootingInstantiated))).
+					NotTo(ContainElement(ContainSubstring("rareHelper")))
+			})
+
+			It("names the generic it could not follow rather than reporting past it", func(ctx SpecContext) {
+				// Opaque calls through a function value, which needs the type flow only
+				// an instantiation carries. Saying so is a different claim from calling
+				// what lies beyond it dead, and no exemption covers it: the point
+				// of the verdict is that an exempt declaration would otherwise go
+				// unmentioned.
+				Expect(analyzeWith(ctx, "apigenerics", generic(engine.GenericRootingInstantiated))).
+					To(ContainElement("lib/lib.go:60:6: unmeasured exported generic: Opaque"))
+			})
+
+			It("still draws the test-only family on what no instantiation reaches", func(ctx SpecContext) {
+				// The instantiation a test writes stands in for a consumer's type argument
+				// and for nothing else. auditHelper is production code the test calls
+				// directly, no path from the public surface arrives at it, and it stays
+				// reported — supplying a type argument is not a use.
+				Expect(analyzeWith(ctx, "apigenerics", generic(engine.GenericRootingInstantiated))).
+					To(ContainElement("lib/lib.go:45:6: test-only unreachable func: auditHelper"))
+			})
+
+			It("rejects a generic rooting with no api patterns", func(ctx SpecContext) {
+				_, err := engine.Analyze(ctx, engine.Config{
+					Dir:         fixtureDir("control"),
+					Patterns:    []string{"./..."},
+					APIGenerics: engine.GenericRootingInstantiated,
+				})
+
+				Expect(err).To(MatchError(ContainSubstring("api generic rooting requires api patterns")))
+			})
+
+			It("rejects an unknown generic rooting", func(ctx SpecContext) {
+				_, err := engine.Analyze(ctx, engine.Config{
+					Dir:         fixtureDir("control"),
+					Patterns:    []string{"./..."},
+					API:         []string{"./..."},
+					APIGenerics: "nonsense",
+				})
+
+				Expect(err).To(MatchError(ContainSubstring(`unknown api generic rooting "nonsense"`)))
+			})
+		})
+
 		It("rejects api exemptions with no api patterns", func(ctx SpecContext) {
 			_, err := engine.Analyze(ctx, engine.Config{
 				Dir:       fixtureDir("control"),

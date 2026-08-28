@@ -105,6 +105,7 @@ linters:
           tests: true              # default; matches run.tests, and reports the test-only family
           api: ['./pkg/...']       # package patterns whose exported surface consumers reach
           api-exempt: [method]     # default when api is set
+          api-generics: instantiated  # default when api is set; skip roots none of it
           test-facing: ['./plugins/test/...']  # packages whose intended consumers are tests
           roots: ['tools/*.go']    # entry-point files the load cannot reach
 ```
@@ -124,6 +125,51 @@ linters:
       - linters: [deadcode]
         text: '^test-only '
 ```
+
+`api-generics` decides how the declared surface's generic declarations are
+rooted, and it matters most for the libraries that need `api` most. Rapid Type
+Analysis roots concrete functions, so a generic declaration cannot be one: an
+uninstantiated body has no instance to root at, and a type parameter reaching
+RTA as a runtime type panics it. A library whose public API is generic would
+therefore root almost nothing, and the whole helper layer beneath that API would
+be reported as unreachable — a failure to root, wearing the shape of a liveness
+verdict.
+
+The default, `instantiated`, roots the concrete instantiations the program
+builds of that surface instead. `skip` is the older behavior, kept for a run
+that wants nothing rooted it cannot root directly. Those are ordinary functions, and reachability reads them like
+any other. The type arguments are not evidence about the API: an instantiation
+calls the same declarations whichever a consumer picks, and the reachable set
+comes from the body. Instantiations therefore count wherever they were written,
+test files included — a library's own tests are usually the only code
+instantiating its public generics, and refusing them would leave the surface
+unrooted in precisely the masked view the `test-only` family asks about. What a
+type argument does decide is which of its own methods become runtime types, so a
+production method that only a test's type argument selects is credited rather
+than reported. That is the one thing this setting gives up; `skip` is how to
+decline it.
+
+A generic the program never instantiates has nothing to monomorphize, so its
+body is walked instead: the concrete functions it calls are rooted directly,
+because it calls them whatever a consumer instantiates it with. Where that walk
+meets a call it cannot resolve — through an interface or a function value — the
+generic is reported as `unmeasured exported generic` rather than letting what
+lies past it be called dead. That verdict is about the analysis, not the
+declaration, and no `api-exempt` kind covers it. It is reported by default,
+because an unfollowed edge is worth knowing about; silence it, if you must, the
+same way as any other rule:
+
+```yaml
+linters:
+  exclusions:
+    rules:
+      - linters: [deadcode]
+        text: '^unmeasured '
+```
+
+`roots` is the stronger answer where you can pay for it, and the two compose: a
+root program supplies the instantiation a real consumer would, and anything it
+does not reach stays reported.
 
 `test-facing` declares packages whose intended consumers are tests — a test
 plugin that looks, feels, and compiles like a production plugin, kept alive by

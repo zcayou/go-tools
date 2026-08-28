@@ -73,6 +73,29 @@
 // A generic-heavy API standing in for its own roots therefore leaves the code
 // only it reaches reported as unreachable.
 //
+// [GenericRootingInstantiated] is the answer to that. It roots the concrete
+// instantiations the program builds of the declared surface instead, which
+// are ordinary concrete functions RTA reads like any other. The type arguments
+// are not read as evidence: an instantiation calls the same declarations
+// whichever a consumer picks, and the reachable set is taken from the body. So
+// instantiations count wherever they were written, test files included —
+// for a library, its own tests are usually the only code instantiating its
+// public generics, and refusing them leaves the surface unrooted in exactly
+// the masked view the question is asked in. What the argument does decide
+// is which of its own methods become runtime types, so a method a test type
+// alone selects is credited where the default would have reported it.
+//
+// A generic the program never instantiates has no monomorphized body to root
+// at all. Its origin body still exists, and the calls it makes to concrete
+// functions are the same calls whatever a consumer instantiates it with, so
+// those callees are rooted directly and reachability carries on from them.
+// Where that walk meets a call it cannot resolve — through an interface,
+// or a function value — the generic draws [VerdictUnmeasuredGeneric] instead.
+// That verdict reports the analysis rather than the declaration: it says
+// an edge went unfollowed, which is why nothing past it is reported
+// as unreachable on the strength of it. No exemption covers it, because
+// an exempt declaration is exactly the one nothing else would mention.
+//
 // # What counts as a reference
 //
 // An exported identifier is reported as unused when its only references are its

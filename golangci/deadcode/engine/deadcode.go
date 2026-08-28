@@ -50,6 +50,26 @@ func Kinds() []Kind {
 	return []Kind{KindFunc, KindMethod, KindType, KindConst, KindVar, KindInterfaceMethod}
 }
 
+// GenericRooting is how a declared API package's generic declarations enter
+// the root set. The zero value reads as [GenericRootingInstantiated] wherever
+// an API is declared, and is inert everywhere else.
+type GenericRooting string
+
+const (
+	// GenericRootingSkip leaves generic declarations out of the root set, so
+	// what a generic API alone reaches is reported as unreachable.
+	GenericRootingSkip GenericRooting = "skip"
+	// GenericRootingInstantiated roots the concrete instantiations the program
+	// builds of that surface, which is what makes the code beneath a generic API
+	// measurable at all.
+	GenericRootingInstantiated GenericRooting = "instantiated"
+)
+
+// GenericRootings returns every [GenericRooting], for callers validating one.
+func GenericRootings() []GenericRooting {
+	return []GenericRooting{GenericRootingSkip, GenericRootingInstantiated}
+}
+
 // Verdict is why a declaration was reported. The set is closed: every [Finding]
 // carries one of these, and one declaration can draw more than one. Under
 // [Config.Tests] each verdict also exists in a test-only form — the same token
@@ -85,6 +105,12 @@ const (
 	// VerdictReflectionLiveMethod is an exported method reachability keeps alive
 	// only through reflection, with no source-level use behind it.
 	VerdictReflectionLiveMethod Verdict = "unused reflection-live exported method"
+	// VerdictUnmeasuredGeneric is an exported generic declaration the program
+	// never instantiates and whose body makes a call the analysis cannot resolve.
+	// It claims nothing about the declaration: it says the run could not follow
+	// what the declaration reaches, so an unreachable verdict anywhere past
+	// that call would be a guess.
+	VerdictUnmeasuredGeneric Verdict = "unmeasured exported generic"
 )
 
 // Config is one analysis request. The zero value analyzes ./... in the working
@@ -120,6 +146,12 @@ type Config struct {
 	// An exempt declaration is still a call-graph root, so whatever it alone
 	// reaches stays live.
 	APIExempt []Kind
+
+	// APIGenerics is how the declared surface's generic declarations are rooted.
+	// It requires API, and defaults to [GenericRootingInstantiated]. Set
+	// it to [GenericRootingSkip] to root only what Rapid Type Analysis takes
+	// directly, which reports whatever a generic API alone reaches as unreachable.
+	APIGenerics GenericRooting
 
 	// TestFacing are package patterns whose intended consumers are tests:
 	// production-shaped code that exists to be exercised by test files. They join
@@ -167,7 +199,7 @@ type Finding struct {
 // test-only form, holding the production declarations only test evidence keeps
 // alive. Callers that want a single positional order must sort.
 func Analyze(ctx context.Context, cfg Config) ([]Finding, error) {
-	surface, err := newAPISurface(cfg.API, cfg.APIExempt)
+	surface, err := newAPISurface(cfg.API, cfg.APIExempt, cfg.APIGenerics)
 	if err != nil {
 		return nil, err
 	}
@@ -312,7 +344,9 @@ func evaluate(
 		return binds.bound(key) || methodRefs.dispatchCredited(key)
 	}
 
-	funcs, reach, err := unreachableFuncs(ctx, prog, ssaPkgs, pkgs, surface, deadTypes, facts, tests, v, participation)
+	funcs, unmeasured, reach, err := unreachableFuncs(
+		ctx, prog, ssaPkgs, pkgs, surface, deadTypes, facts, tests, v, participation,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -327,6 +361,10 @@ func evaluate(
 		}
 		found = append(found, decl)
 	}
+	// The unmeasured verdict reports the analysis, not the declaration, so no
+	// exemption applies to it: an exempt kind is where a gap in coverage matters
+	// most, because nothing else would ever mention that declaration again.
+	found = append(found, unmeasured...)
 	return found, nil
 }
 

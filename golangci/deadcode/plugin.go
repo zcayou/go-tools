@@ -55,6 +55,12 @@ type Settings struct {
 	// Requires API.
 	APIExempt []string `json:"api-exempt"`
 
+	// APIGenerics is how the declared surface's generic declarations are rooted:
+	// instantiated, the default, which roots the concrete instantiations
+	// the program builds of them, or skip, which roots none of them and so
+	// reports whatever a generic API alone reaches as unreachable. Requires API.
+	APIGenerics *string `json:"api-generics"`
+
 	// TestFacing are package patterns whose intended consumers are tests:
 	// production-shaped code, a test plugin say, that exists to be exercised
 	// by test files. A declared package draws no test-only verdicts of its own —
@@ -141,6 +147,10 @@ func configFrom(s Settings) (engine.Config, error) {
 	if err != nil {
 		return engine.Config{}, err
 	}
+	generics, err := genericRooting(s)
+	if err != nil {
+		return engine.Config{}, err
+	}
 	if s.Patterns != nil && len(s.Patterns) == 0 {
 		return engine.Config{}, errors.New("patterns is empty: omit it to analyze the whole module")
 	}
@@ -160,13 +170,14 @@ func configFrom(s Settings) (engine.Config, error) {
 	}
 
 	return engine.Config{
-		Patterns:   s.Patterns,
-		BuildTags:  s.BuildTags,
-		Tests:      tests,
-		API:        s.API,
-		APIExempt:  exempts,
-		TestFacing: s.TestFacing,
-		Roots:      s.Roots,
+		Patterns:    s.Patterns,
+		BuildTags:   s.BuildTags,
+		Tests:       tests,
+		API:         s.API,
+		APIExempt:   exempts,
+		APIGenerics: generics,
+		TestFacing:  s.TestFacing,
+		Roots:       s.Roots,
 	}, nil
 }
 
@@ -193,6 +204,32 @@ func exemptions(s Settings) ([]engine.Kind, error) {
 		exempts = append(exempts, kind)
 	}
 	return exempts, nil
+}
+
+// genericRooting validates api-generics, leaving the default to the engine so
+// that every driver reads an absent key the same way. Like api-exempt it says
+// nothing without api patterns, so declaring it alone is an error rather than
+// a setting that quietly roots nothing.
+func genericRooting(s Settings) (engine.GenericRooting, error) {
+	if s.APIGenerics == nil {
+		return "", nil
+	}
+	if len(s.API) == 0 {
+		return "", errors.New("api-generics requires api")
+	}
+	rooting := engine.GenericRooting(*s.APIGenerics)
+	if !slices.Contains(engine.GenericRootings(), rooting) {
+		return "", fmt.Errorf("unknown api-generics %q: want one of %s", *s.APIGenerics, rootingNames())
+	}
+	return rooting, nil
+}
+
+func rootingNames() string {
+	names := make([]string, 0, len(engine.GenericRootings()))
+	for _, rooting := range engine.GenericRootings() {
+		names = append(names, string(rooting))
+	}
+	return strings.Join(names, ", ")
 }
 
 func kindNames() string {
