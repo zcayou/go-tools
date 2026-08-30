@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"maps"
 
 	"golang.org/x/tools/go/packages"
 )
@@ -29,7 +30,12 @@ type methodReferenceScan struct {
 	interfaceMethodSpans  map[string][]span
 	concreteMethodSpans   map[string][]span
 	blankSpans            spanIndex
-	evidence              *evidence
+	// generated holds the files no verdict is reported in. It filters what
+	// the interface-method scan reports, never what it indexes: the index answers
+	// whether this analysis can see an interface's call sites, and a generated
+	// file's are as visible as any other.
+	generated map[string]bool
+	evidence  *evidence
 }
 
 type concreteMethod struct {
@@ -97,10 +103,12 @@ func newMethodReferenceScan(
 		interfaceMethodSpans:  map[string][]span{},
 		concreteMethodSpans:   map[string][]span{},
 		blankSpans:            spanIndex{},
+		generated:             map[string]bool{},
 		evidence:              ev,
 	}
 	for _, pkg := range pkgs {
-		scan.addPackageDeclarations(pkg, facts[pkg])
+		maps.Copy(scan.generated, facts[pkg].generated)
+		scan.addPackageDeclarations(pkg)
 	}
 	for _, pkg := range pkgs {
 		scan.addPackageUses(pkg, v)
@@ -112,7 +120,7 @@ func newMethodReferenceScan(
 // the package holds. A synthesized root program contributes only its blank
 // assertion spans — the one declaration-side fact that filters uses rather than
 // adding candidates.
-func (s *methodReferenceScan) addPackageDeclarations(pkg *packages.Package, facts fileFacts) {
+func (s *methodReferenceScan) addPackageDeclarations(pkg *packages.Package) {
 	fset := pkg.Fset
 	synthesized := synthesizedPackage(pkg.PkgPath)
 
@@ -134,7 +142,7 @@ func (s *methodReferenceScan) addPackageDeclarations(pkg *packages.Package, fact
 				switch decl.Tok {
 				case token.TYPE:
 					if !synthesized {
-						s.addInterfaceMethods(pkg, decl, facts.generated)
+						s.addInterfaceMethods(pkg, decl)
 					}
 				case token.VAR:
 					s.addBlankVarSpans(pkg, decl)
@@ -200,7 +208,13 @@ func (s *methodReferenceScan) addDynamicDispatchUses(method *types.Func, pos tok
 	}
 }
 
-func (s *methodReferenceScan) addInterfaceMethods(pkg *packages.Package, decl *ast.GenDecl, generated map[string]bool) {
+// addInterfaceMethods indexes every interface method the package declares,
+// including the ones in test and generated files. The index is what tells
+// participation whether an interface belongs to this analysis, and a test
+// file's interface is this analysis's: its call sites are in the loaded
+// program, unlike a dependency's. Which of them are reported is decided where
+// they are reported.
+func (s *methodReferenceScan) addInterfaceMethods(pkg *packages.Package, decl *ast.GenDecl) {
 	for _, spec := range decl.Specs {
 		typeSpec := spec.(*ast.TypeSpec)
 		ifaceType, ok := typeSpec.Type.(*ast.InterfaceType)
@@ -217,9 +231,6 @@ func (s *methodReferenceScan) addInterfaceMethods(pkg *packages.Package, decl *a
 					continue
 				}
 				pos := position(pkg.Fset, obj.Pos())
-				if testFile(pos.Filename) || generated[pos.Filename] {
-					continue
-				}
 				key := declKey(pos)
 				s.interfaceMethods[key] = declaration{
 					pos: pos, verdict: VerdictUnusedInterfaceMethod,
@@ -244,7 +255,7 @@ func (s *methodReferenceScan) addBlankVarSpans(pkg *packages.Package, decl *ast.
 func unusedInterfaceMethods(scan *methodReferenceScan, flows *interfaceFlows) []declaration {
 	var unused []declaration
 	for key, decl := range scan.interfaceMethods {
-		if flows.used(key) {
+		if flows.used(key) || scan.generated[decl.pos.Filename] {
 			continue
 		}
 		unused = append(unused, decl)

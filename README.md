@@ -126,6 +126,17 @@ linters:
         text: '^test-only '
 ```
 
+Where an interface is declared decides nothing about how it is weighed; whether
+the run loads it does. Binding a type to an interface credits that type's method
+only while something selects the interface method — otherwise a dead interface
+would launder every implementation behind it — and an interface declared in a
+`_test.go` file is subject to that rule like any other, because every call site
+it has is one the run loaded. Only a dependency's interface, whose call sites
+are invisible, credits unconditionally. So a fixture registering a type against
+a contract it never exercises draws both halves, `unreachable func` on the
+implementation and `unused interface method` on the contract, and the pair is
+the finding: the contract is what wants deleting or asserting on.
+
 `api-generics` decides how the declared surface's generic declarations are
 rooted, and it matters most for the libraries that need `api` most. Rapid Type
 Analysis roots concrete functions, so a generic declaration cannot be one: an

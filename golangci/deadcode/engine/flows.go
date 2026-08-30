@@ -37,9 +37,9 @@ type flowEdge struct {
 
 // flowMethod is one target-interface method. inScan says whether
 // the interface-method scan holds its declaration; a method outside the scan —
-// a dependency's, anonymous, generated-file or test-declared interface — counts
-// as used unconditionally, for the reason confersUse treats those interfaces
-// as unconditional: their call sites are invisible.
+// a dependency's or an anonymous interface — counts as used unconditionally,
+// for the reason confersUse treats those interfaces as unconditional: their
+// call sites are invisible.
 type flowMethod struct {
 	decl   *types.Func
 	sig    *types.Signature

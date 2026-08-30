@@ -345,6 +345,12 @@ func isReflectTypeAssert(fn *types.Func) bool {
 // keeps a dead interface method from laundering its implementations: the method
 // is reported alongside them instead. An anonymous interface has no declaration
 // to weigh and confers unconditionally.
+//
+// A contract a _test.go file declares is the analyzed packages', not
+// a dependency's. The analysis loads those files and builds their bodies, so
+// every call site the contract has is one it can see, and the conditional rule
+// is the one that applies. Whether such a contract is reported is a separate
+// question, answered where the verdict is drawn.
 func confersUse(
 	fset *token.FileSet,
 	refs *methodReferenceScan,

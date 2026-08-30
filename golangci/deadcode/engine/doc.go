@@ -198,6 +198,14 @@
 // what implements it. An anonymous interface has no declaration to weigh
 // and confers unconditionally.
 //
+// Whose an interface is turns on whether this analysis loads it, not on which
+// file it sits in. A contract declared in a _test.go file is the analyzed
+// packages': its call sites are all in the loaded program, so a bind through
+// it confers only while the contract is used, exactly as a production one does.
+// Reporting is filtered separately — generated files draw no verdict, while
+// a test file draws every verdict its declarations earn, which is what pairs
+// a dead contract with the implementations satisfying it.
+//
 // # The analyzed set is an input, not just a filter
 //
 // Because participation is weighed against whether the interface's own liveness

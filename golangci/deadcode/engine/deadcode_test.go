@@ -246,6 +246,28 @@ var _ = Describe("Analyze", func() {
 		})
 	})
 
+	Describe("a contract a test file declares", func() {
+		// Whose an interface is turns on whether the run loads it, not on which file
+		// it sits in. A _test.go contract's call sites are all in the loaded program,
+		// so the conditional rule applies to it exactly as it does to a production
+		// interface, and the dead pair is reported together rather than crediting
+		// itself away.
+		It("weighs it like any interface the analyzed packages own", func(ctx SpecContext) {
+			Expect(analyzeWith(ctx, "testcontract", engine.Config{Tests: true})).To(Equal([]string{
+				// register binds fixture to contract, and nothing selects sample, so
+				// the bind confers nothing and both halves are reported. The used pair
+				// beside it carries the same shape with take selected, which is what
+				// keeps this from asserting that a test contract never confers.
+				"main_test.go:16:16: unreachable func: fixture.sample",
+				"main_test.go:11:2: unused interface method: contract.sample",
+			}))
+		})
+
+		It("reports nothing once the test files are out of the program", func(ctx SpecContext) {
+			Expect(analyzeWith(ctx, "testcontract", engine.Config{})).To(BeNil())
+		})
+	})
+
 	Describe("declared test-facing packages", func() {
 		// The kit package is production-shaped and consumed only by the main
 		// package's test file, through a production declaration of its own
