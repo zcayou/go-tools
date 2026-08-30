@@ -332,7 +332,7 @@ func evaluate(
 	ev := newEvidence(prog, inst, v)
 	methodRefs := newMethodReferenceScan(pkgs, facts, ev, v)
 	flows := newInterfaceFlows(prog, inst, methodRefs, v)
-	binds := newInterfaceBindScan(prog, pkgs, methodRefs, analyzedPackages(pkgs), ev, inst, flows, v)
+	binds := newInterfaceBindScan(prog, pkgs, surface, methodRefs, analyzedPackages(pkgs), ev, inst, flows, v)
 	if err := canceled(ctx, "scanning interface binds"); err != nil {
 		return nil, err
 	}

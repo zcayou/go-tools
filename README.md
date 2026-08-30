@@ -126,6 +126,18 @@ linters:
         text: '^test-only '
 ```
 
+A sealed interface — one declaring an unexported method, so that no other
+package can implement it — is weighed against the declared surface. Nothing in
+the module converts a handle to it when the factory hands back the concrete
+type, because a consumer does that; and no exemption reaches the resulting
+verdict, since the exempt kinds cover the exported surface while the sealing
+method is unexported by construction. So an exported sealed interface in an
+`api` package credits its implementations, the way a dependency's interface
+does. It takes `api`: sealing on its own credits nothing. A generic sealed
+interface is weighed per instantiation the program builds, and one the program
+never instantiates credits nothing — the implementation and the contract are
+then reported as a pair.
+
 Where an interface is declared decides nothing about how it is weighed; whether
 the run loads it does. Binding a type to an interface credits that type's method
 only while something selects the interface method — otherwise a dead interface

@@ -116,7 +116,7 @@
 // or errors.Is walk an Unwrap chain — so a bind credits every method
 // the interface declares.
 //
-// Three kinds of evidence establish a bind, because no single one covers
+// Four kinds of evidence establish a bind, because no single one covers
 // the cases:
 //
 //   - A conversion to the interface, read from the SSA program. Generics
@@ -133,6 +133,24 @@
 //     instantiation. A constraint is satisfied rather than converted, so no
 //     conversion records it, but the compiler verified the argument against
 //     it — the same evidence a conversion carries.
+//   - A sealed interface the declared API surface exposes. An unexported
+//     method is scoped to its own package, so no other package can supply one
+//     and the implementations are closed and entirely in view; a consumer
+//     reaching the declared surface has to convert one of them to hold
+//     the interface at all, and that conversion sits in the consumer.
+//
+// Sealing is the one shape no exemption reaches. The exempt kinds stand
+// in for consumers over the exported surface, and a sealing method
+// is unexported by construction, so without the surface rule the standard idiom
+// for a closed implementation set reports every implementation
+// of it as unreachable — and returning the interface from the factory,
+// the change that would make the conversion visible, is exactly what a typed
+// handle cannot do. The credit needs the surface declared: sealing alone says
+// nothing, because the fallback root set is a way to measure a library rather
+// than to shield one. A generic sealed interface contributes the instantiations
+// the program builds of it, since a parameterized interface is a shape no
+// concrete method set matches, and one the program never instantiates
+// contributes nothing.
 //
 // Structural satisfaction alone credits nothing: a dependency's interface
 // that merely declares a method of the same name is not a use. Because
@@ -202,7 +220,11 @@
 // from laundering its implementations: the method is reported alongside them
 // instead, and an adapter-shadowed declaration no longer strips credit from
 // what implements it. An anonymous interface has no declaration to weigh
-// and confers unconditionally.
+// and confers unconditionally, and so does a sealed one the declared surface
+// exposes, for the reason a dependency's does: what a consumer selects through
+// it is not in the loaded program. A sealed interface nothing exposes is still
+// reported, as the unused exported type it is — the verdict that names
+// the contract rather than the implementations satisfying it.
 //
 // Whose an interface is turns on whether this analysis loads it, not on which
 // file it sits in. A contract declared in a _test.go file is the analyzed

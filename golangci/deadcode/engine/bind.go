@@ -12,11 +12,12 @@ import (
 
 // interfaceBindScan records the exported methods a concrete type contributes
 // to an interface the program actually binds it to: a conversion
-// to that interface, a type assertion that discovers it, or a generic
-// instantiation that constrains on it. Participation is all a static analysis
-// can observe once the caller is a library — it never sees log/slog invoke
-// the handler it was given — so a bind counts as a use of every method
-// the interface declares.
+// to that interface, a type assertion that discovers it, a generic
+// instantiation that constrains on it, or a declared API surface sealing
+// the interface so that only this module's own types can implement it.
+// Participation is all a static analysis can observe once the caller
+// is a library — it never sees log/slog invoke the handler it was given — so
+// a bind counts as a use of every method the interface declares.
 //
 // Conversions are read from the SSA program, where generics are already
 // instantiated, so a concrete type reaching a generic interface is seen
@@ -32,6 +33,7 @@ type interfaceBindScan struct {
 func newInterfaceBindScan(
 	prog *ssa.Program,
 	loaded []*packages.Package,
+	surface *apiSurface,
 	refs *methodReferenceScan,
 	analyzed map[string]bool,
 	ev *evidence,
@@ -48,6 +50,7 @@ func newInterfaceBindScan(
 		scan.creditAssertion(prog.Fset, refs, flows, analyzed, ev, inst, asserted)
 	}
 	scan.creditInstantiations(prog.Fset, refs, flows, analyzed, inst)
+	scan.creditSealedSurface(refs, sealedSurfaceInterfaces(surface, inst, loaded))
 
 	return scan
 }
@@ -334,6 +337,101 @@ func collectAsserted(
 
 func isReflectTypeAssert(fn *types.Func) bool {
 	return fn.Name() == "TypeAssert" && fn.Pkg() != nil && fn.Pkg().Path() == "reflect"
+}
+
+// creditSealedSurface credits every implementation of a sealed interface
+// the declared API surface exposes. Sealed means the interface declares
+// an unexported method, and Go scopes an unexported method name to its own
+// package, so no other package can supply one: the implementations are closed,
+// in-module, and entirely in view. A consumer reaching the declared surface has
+// to convert one of them to hold the interface at all, and that conversion sits
+// in the consumer — the code this analysis does not load, the same blind spot
+// that makes a dependency's interface confer unconditionally. Without
+// the credit, sealing an API reports every implementation of it as unreachable,
+// and no exemption can reach that verdict: the exempt kinds cover the exported
+// surface, while the sealing method is unexported by construction.
+//
+// The credit is unconditional rather than weighed through confersUse,
+// for the reason a dependency's interface is: what a consumer selects through
+// the interface is not in the loaded program. A sealed interface nothing
+// in-module selects and nothing exposes is still reported — as the unused
+// exported type it is, which is the verdict naming the contract rather than
+// the implementations satisfying it.
+func (s *interfaceBindScan) creditSealedSurface(refs *methodReferenceScan, sealed []*types.Interface) {
+	for _, iface := range sealed {
+		for method := range iface.Methods() {
+			for _, implementation := range refs.concreteMethodsByName[method.Name()] {
+				if implementsInterface(implementation.fn, iface) {
+					s.credited[implementation.key] = true
+				}
+			}
+		}
+	}
+}
+
+// sealedSurfaceInterfaces returns the interfaces the declared API surface
+// exposes that no other package can implement: exported, declared outside
+// a test file in a package the surface names, and holding at least one
+// unexported method. With no surface declared this returns nothing, which
+// is the intended reading — the fallback root set is a way to measure
+// a library, not a way to shield one, so standing in for consumers takes
+// saying they exist.
+//
+// A generic interface contributes the instantiations the program builds
+// of it rather than its parameterized form, which is a shape no concrete method
+// set matches. One the program never instantiates contributes nothing, the way
+// every other resolved-vector credit degrades.
+func sealedSurfaceInterfaces(surface *apiSurface, inst *instantiations, loaded []*packages.Package) []*types.Interface {
+	var sealed []*types.Interface
+	for _, pkg := range loaded {
+		if pkg.Types == nil || !surface.packages[pkg.PkgPath] {
+			continue
+		}
+		scope := pkg.Types.Scope()
+		for _, name := range scope.Names() {
+			obj, isType := scope.Lookup(name).(*types.TypeName)
+			if !isType || !obj.Exported() || testFile(position(pkg.Fset, obj.Pos()).Filename) {
+				continue
+			}
+			named, isNamed := types.Unalias(obj.Type()).(*types.Named)
+			if !isNamed {
+				continue
+			}
+			iface, isSealed := sealedInterface(named.Underlying())
+			if !isSealed {
+				continue
+			}
+			if named.TypeParams().Len() == 0 {
+				sealed = append(sealed, iface)
+				continue
+			}
+			for _, vector := range inst.vectors(obj) {
+				instance, err := types.Instantiate(nil, named.Origin(), vector, false)
+				if err != nil {
+					continue
+				}
+				if instantiated, ok := sealedInterface(instance.Underlying()); ok {
+					sealed = append(sealed, instantiated)
+				}
+			}
+		}
+	}
+	return sealed
+}
+
+// sealedInterface returns the interface behind t when no package but its own
+// can implement it, which one unexported method is enough to make.
+func sealedInterface(t types.Type) (*types.Interface, bool) {
+	iface, ok := t.(*types.Interface)
+	if !ok {
+		return nil, false
+	}
+	for method := range iface.Methods() {
+		if !method.Exported() {
+			return iface, true
+		}
+	}
+	return nil, false
 }
 
 // confersUse reports whether satisfying method through iface counts as a use

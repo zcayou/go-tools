@@ -594,6 +594,80 @@ var _ = Describe("Analyze", func() {
 			})
 		})
 
+		Describe("a sealed surface", func() {
+			// lib seals its interfaces with an unexported method, so no package but lib
+			// can implement them and the conversion that puts a handle behind one
+			// belongs to a consumer. hidden holds the same shape outside the surface.
+			sealed := func(patterns ...string) engine.Config {
+				return engine.Config{
+					API:       patterns,
+					APIExempt: []engine.Kind{engine.KindMethod, engine.KindFunc, engine.KindType},
+				}
+			}
+
+			It("reports every implementation while no surface is declared", func(ctx SpecContext) {
+				// Sealing alone credits nothing. The fallback root set measures a library
+				// rather than shielding one, so standing in for consumers takes saying
+				// they exist.
+				Expect(analyzeFixture(ctx, "sealedsurface")).To(ContainElements(
+					"lib/lib.go:14:14: unreachable func: Ref.input",
+					"lib/lib.go:22:20: unreachable func: Tagged.input",
+					"lib/lib.go:33:18: unreachable func: Binding.bound",
+					"lib/lib.go:48:20: unreachable func: StringKey.key",
+				))
+			})
+
+			It("credits what only a consumer could convert once the surface is declared", func(ctx SpecContext) {
+				// No exemption reaches these: the exempt kinds cover the exported surface,
+				// and a sealing method is unexported by construction. Tagged.input proves
+				// the credit reaches a generic receiver, and Binding.Name that a sealed
+				// interface credits the exported methods a consumer holding it can call.
+				Expect(analyzeWith(ctx, "sealedsurface", sealed("./..."))).To(Equal([]string{
+					"lib/lib.go:40:20: unreachable func: halfBound.bound",
+					"lib/lib.go:56:19: unreachable func: IntTaken.taken",
+					"lib/lib.go:52:39: unused interface method: Untaken.taken",
+				}))
+			})
+
+			It("credits by satisfaction rather than by method name", func(ctx SpecContext) {
+				// halfBound carries the seal and not Bound's exported half, so
+				// it implements the contract nowhere and the contract credits it nowhere.
+				Expect(analyzeWith(ctx, "sealedsurface", sealed("./..."))).
+					To(ContainElement("lib/lib.go:40:20: unreachable func: halfBound.bound"))
+			})
+
+			It("weighs a generic contract per instantiation and reports what has none", func(ctx SpecContext) {
+				// Keyed[string] is a shape the program builds, so StringKey.key is credited
+				// against it. Untaken is instantiated nowhere, so there is no concrete
+				// interface to weigh IntTaken.taken against — and the pair says so, naming
+				// the contract alongside the implementation.
+				findings := analyzeWith(ctx, "sealedsurface", sealed("./..."))
+				Expect(findings).NotTo(ContainElement(ContainSubstring("StringKey.key")))
+				Expect(findings).To(ContainElements(
+					"lib/lib.go:56:19: unreachable func: IntTaken.taken",
+					"lib/lib.go:52:39: unused interface method: Untaken.taken",
+				))
+			})
+
+			It("credits nothing in a package the surface does not name", func(ctx SpecContext) {
+				// hidden seals Gate exactly as lib seals Input. Declaring one package
+				// says nothing about who consumes another.
+				Expect(analyzeWith(ctx, "sealedsurface", sealed("./lib"))).To(ContainElements(
+					"hidden/hidden.go:9:16: unreachable func: Entry.gate",
+					"hidden/hidden.go:7:6: unused exported type: Entry",
+				))
+			})
+
+			It("leaves an unsealed interface weighed as it always was", func(ctx SpecContext) {
+				// Open declares an exported method set, which any package can satisfy, so
+				// nothing about the surface closes its implementations. Plain.Label
+				// is silent here because the exempt kinds cover an exported method, which
+				// is the answer that already existed.
+				Expect(analyzeWith(ctx, "sealedsurface", engine.Config{API: []string{"./..."}})).
+					To(ContainElement("lib/lib.go:64:14: unused exported method: Plain.Label"))
+			})
+		})
+
 		It("rejects api exemptions with no api patterns", func(ctx SpecContext) {
 			_, err := engine.Analyze(ctx, engine.Config{
 				Dir:       fixtureDir("control"),
