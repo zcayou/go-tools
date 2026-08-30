@@ -28,6 +28,15 @@ import (
 // in the closure is invoked by an fmt call on the boxed value, so crediting
 // it is correct.
 //
+// That argument reaches exactly as far as reflection does, so an unexported
+// method is weighed against the seeds instead — the conversion operands
+// and the reflect.TypeFor arguments themselves, not what the closure derived
+// from them. Reflection obtains no unexported method, so a type reached only
+// by derivation carries no evidence that the program can invoke one on it,
+// and the exported-method argument above never applied to that case. The two
+// gates are the same question asked of what each kind of method is reachable
+// through.
+//
 // The closure additionally seeds from the resolved type arguments
 // of reflect.TypeFor, which conjures a type descriptor no MakeInterface ever
 // carried — reflect.Zero on it produces the value the operand sweep never saw.
@@ -40,7 +49,11 @@ type evidence struct {
 	// granted records every type the closure visited; the value says whether some
 	// non-skip position reached it, which is what grants evidence.
 	granted typeutil.Map
-	msets   *typeutil.MethodSetCache
+	// seeds records the types the closure started from — conversion operands
+	// and resolved reflect.TypeFor arguments — as opposed to the types it derived
+	// from them. An unexported method is credited against these alone.
+	seeds typeutil.Map
+	msets *typeutil.MethodSetCache
 }
 
 func newEvidence(prog *ssa.Program, inst *instantiations, v view) *evidence {
@@ -53,12 +66,12 @@ func newEvidence(prog *ssa.Program, inst *instantiations, v view) *evidence {
 					continue
 				}
 				ev.addConversion(conversion.X.Type(), conversion.Type())
-				ev.derive(conversion.X.Type(), false)
+				ev.seed(conversion.X.Type())
 			}
 		}
 	}
 	for _, typ := range reflectTypeForArguments(prog, inst) {
-		ev.derive(typ, false)
+		ev.seed(typ)
 	}
 	return ev
 }
@@ -97,11 +110,32 @@ func (e *evidence) materialized(method *types.Func) bool {
 	if pointer, ok := typ.(*types.Pointer); ok {
 		typ = types.Unalias(pointer.Elem())
 	}
-	if e.evident(typ) || e.evident(types.NewPointer(typ)) {
+	granted := e.evident
+	if !method.Exported() {
+		// What RTA keeps alive off a derived type is its exported method set, which
+		// is the whole of what reflection can reach there. Deriving a receiver into
+		// the closure therefore says nothing about whether an unexported method
+		// on it can be invoked, so one is credited against the seeds alone.
+		granted = e.seeded
+	}
+	if granted(typ) || granted(types.NewPointer(typ)) {
 		return true
 	}
 	named, ok := typ.(*types.Named)
-	return ok && named.TypeArgs().Len() > 0 && e.evident(named.Origin())
+	return ok && named.TypeArgs().Len() > 0 && granted(named.Origin())
+}
+
+// seeded reports whether the type is one the closure started from rather than
+// one it derived from something else.
+func (e *evidence) seeded(t types.Type) bool {
+	granted, ok := e.seeds.At(t).(bool)
+	return ok && granted
+}
+
+// seed records t as a starting point of the closure and derives from it.
+func (e *evidence) seed(t types.Type) {
+	e.seeds.Set(t, true)
+	e.derive(t, false)
 }
 
 func (e *evidence) evident(t types.Type) bool {

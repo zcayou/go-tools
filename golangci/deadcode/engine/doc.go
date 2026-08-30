@@ -153,9 +153,15 @@
 // One evidence base for both sides is load-bearing: RTA keeps every exported
 // method of every derived type alive, so a credit gate consulting anything
 // narrower refuses exactly the methods liveness cannot explain — and alive but
-// uncreditable is the false-positive space. A method of a generic type
-// is judged by its origin, which the closure records alongside every
-// instantiation that enters it.
+// uncreditable is the false-positive space. That argument is about exported
+// methods, because reflection reaches nothing else off a derived type, so
+// an unexported method is credited against the closure's seeds alone —
+// the conversion operands and reflect.TypeFor arguments — rather than
+// everything derived from them. Otherwise a sealed interface's marker would
+// be credited wherever its receiver happened to be the result type of some
+// other type's exported method, which says nothing about whether the marker
+// is ever invoked. A method of a generic type is judged by its origin, which
+// the closure records alongside every instantiation that enters it.
 //
 // Type parameters in the evidence are resolved, never pattern-matched. Every
 // generic object's fully concrete type-argument vectors are read from

@@ -48,6 +48,22 @@ var _ = Describe("Analyze", func() {
 				"main.go:15:13: unused reflection-live exported method: Sink.Report",
 			}),
 
+		// Holder is the fixture's one conversion, so ViaMethod arrives in the closure
+		// derived off Holder's exported Make, while ViaFunc — a free function's
+		// result — never arrives at all. Derivation credits ViaMethod.Label,
+		// the exported method reflection can reach there, and credits neither src:
+		// an unexported method is weighed against the seeds. read and label
+		// are unreachable, which is what makes the point that their selections still
+		// count — dispatch credit is syntactic, so the two src verdicts turn
+		// on the evidence gate alone.
+		Entry("does not let derivation credit an unexported method it cannot reach",
+			"derivedcredit", []string{
+				"main.go:7:6: unreachable func: read",
+				"main.go:13:6: unreachable func: label",
+				"main.go:29:18: unreachable func: ViaMethod.src",
+				"main.go:36:16: unreachable func: ViaFunc.src",
+			}),
+
 		// A reflect-typed container: constructors registered as any, invoked through
 		// reflect, products surfaced behind interfaces by an assertion
 		// in a dependency body SSA never builds. The derived-type closure over
