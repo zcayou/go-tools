@@ -297,8 +297,8 @@ type breach int
 const (
 	// held means every line conforms and the paragraph draws nothing.
 	held breach = iota
-	// overrun is a line past the comment limit with a break available.
-	overrun
+	// overlong is a line past the comment limit with a break available.
+	overlong
 	// stranded is a line ending on a word that belongs with the line below.
 	stranded
 	// underfilled is a line short of the minimum that could still absorb the next
@@ -306,11 +306,29 @@ const (
 	underfilled
 )
 
+// band is the range of widths a comment line may close inside: from minimum
+// up to limit, and for a paragraph of one line, up to overrun past the limit.
+type band struct {
+	minimum int
+	limit   int
+	overrun int
+}
+
 // banded reports the first band rule one of the paragraph's lines breaks,
 // counting each width the way fill counts one. The last line only holds
 // the remainder, so nothing but the limit applies to it, and a single word
 // wider than the limit has nowhere to break and stands wherever it is.
-func (p paragraph) banded(first, rest, minimum, limit int) breach {
+//
+// A paragraph of one line is given the band's overrun past the limit. Filling
+// it would only hand its last word down to a line of its own, and where
+// a longer paragraph headed that way can move an earlier break left inside
+// the band to give the last line company, a single line has no break to move.
+func (p paragraph) banded(first, rest int, b band) breach {
+	ceiling := b.limit
+	if len(p.lines) == 1 {
+		ceiling += b.overrun
+	}
+
 	for i, line := range p.lines {
 		carried := rest
 		if i == 0 {
@@ -318,9 +336,9 @@ func (p paragraph) banded(first, rest, minimum, limit int) breach {
 		}
 
 		width := carried + utf8.RuneCountInString(line)
-		if width > limit {
+		if width > ceiling {
 			if len(strings.Fields(line)) > 1 {
-				return overrun
+				return overlong
 			}
 
 			continue
@@ -333,10 +351,10 @@ func (p paragraph) banded(first, rest, minimum, limit int) breach {
 		if len(next) == 0 {
 			continue
 		}
-		if _, _, ok := demote(line, next[0], rest, limit); ok {
+		if _, _, ok := demote(line, next[0], rest, b.limit); ok {
 			return stranded
 		}
-		if width < minimum && width+1+utf8.RuneCountInString(opening(next)) <= limit {
+		if width < b.minimum && width+1+utf8.RuneCountInString(opening(next)) <= b.limit {
 			return underfilled
 		}
 	}

@@ -83,6 +83,13 @@ var _ = Describe("Plugin", func() {
 		Expect(analyze(analyzerFrom(settings), inBandComment).messages()).To(HaveLen(1))
 	})
 
+	It("takes the comment overrun from the settings block", func() {
+		settings := map[string]any{"comment-overrun": 0}
+
+		Expect(analyze(analyzerFrom(nil), loneComment).messages()).To(BeEmpty())
+		Expect(analyze(analyzerFrom(settings), loneComment).messages()).To(HaveLen(1))
+	})
+
 	It("takes the comment-wrap rule out of the run when asked to", func() {
 		Expect(analyze(analyzerFrom(map[string]any{"comment-wrap": false}), shortComment).messages()).
 			To(BeEmpty())
@@ -100,6 +107,7 @@ var _ = Describe("Plugin", func() {
 			"line-length":        160,
 			"comment-length":     80,
 			"comment-min-length": 70,
+			"comment-overrun":    10,
 			"signature-wrap":     false,
 			"body-collapse":      false,
 			"comment-wrap":       false,
@@ -111,6 +119,7 @@ var _ = Describe("Plugin", func() {
 			LineLength:       new(160),
 			CommentLength:    new(80),
 			CommentMinLength: new(70),
+			CommentOverrun:   new(10),
 			SignatureWrap:    new(false),
 			BodyCollapse:     new(false),
 			CommentWrap:      new(false),
@@ -140,6 +149,12 @@ var _ = Describe("Plugin", func() {
 		_, err := zlines.New(map[string]any{"comment-length": 80, "comment-min-length": 90})
 
 		Expect(err).To(MatchError(ContainSubstring("comment-min-length 90 exceeds comment-length 80")))
+	})
+
+	It("rejects a negative comment overrun, which would report the fill's own line", func() {
+		_, err := zlines.New(map[string]any{"comment-overrun": -1})
+
+		Expect(err).To(MatchError(ContainSubstring("comment-overrun must not be negative")))
 	})
 
 	It("rejects an unknown settings key rather than ignoring it", func() {

@@ -25,11 +25,17 @@ const DefaultLineLength = 120
 // wraps its doc comments, and where Go repositories tend to land unprompted.
 const DefaultCommentLength = 80
 
-// DefaultCommentSlack is how far short of the comment length a line may stop
-// when comment-min-length is left out. Deriving the minimum keeps the band
+// DefaultCommentUnderfill is how far short of the comment length a line may
+// stop when comment-min-length is left out. Deriving the minimum keeps the band
 // following whatever length a repository configures, so one key moves both
 // of its edges.
-const DefaultCommentSlack = 10
+const DefaultCommentUnderfill = 10
+
+// DefaultCommentOverrun is how far a paragraph of one line may run past
+// the comment length when comment-overrun is left out. It matches
+// [DefaultCommentUnderfill], so the one line has the same give above the length
+// that every line has below it.
+const DefaultCommentOverrun = 10
 
 // Settings is the decoded linters.settings.custom.zlines.settings block.
 //
@@ -54,10 +60,17 @@ type Settings struct {
 	// reported, the lower edge of the band CommentLength closes. Inside the band
 	// line breaks are free, which is what keeps one edited word from rewrapping
 	// a whole paragraph; below it a line that could still absorb the next word
-	// is reported. An absent key derives the minimum as [DefaultCommentSlack]
+	// is reported. An absent key derives the minimum as [DefaultCommentUnderfill]
 	// short of the comment length, and a minimum equal to CommentLength asks
 	// for the exact fill back.
 	CommentMinLength *int `json:"comment-min-length"`
+
+	// CommentOverrun is how far a paragraph of one line may run past
+	// CommentLength. Filling such a line only hands its last word down to a line
+	// of its own, and unlike a longer paragraph it has no earlier break to move
+	// instead. An absent key asks for [DefaultCommentOverrun]; zero holds
+	// the line to the length like any other.
+	CommentOverrun *int `json:"comment-overrun"`
 
 	// SignatureWrap says whether the signature-wrap rule is enforced. An absent
 	// key enforces it, so turning the rule off is something a repository has
@@ -118,10 +131,20 @@ func (s Settings) commentLength() int {
 // an unset setting derives from the comment length in force.
 func (s Settings) commentMinLength() int {
 	if s.CommentMinLength == nil {
-		return max(1, s.commentLength()-DefaultCommentSlack)
+		return max(1, s.commentLength()-DefaultCommentUnderfill)
 	}
 
 	return *s.CommentMinLength
+}
+
+// commentOverrun is how far a paragraph of one line may run past the comment
+// length, which an unset setting leaves at [DefaultCommentOverrun].
+func (s Settings) commentOverrun() int {
+	if s.CommentOverrun == nil {
+		return DefaultCommentOverrun
+	}
+
+	return *s.CommentOverrun
 }
 
 // signatureWrap reports whether the signature-wrap rule is enforced, which
@@ -171,6 +194,10 @@ func New(settings any) (register.LinterPlugin, error) {
 	if s.CommentMinLength != nil && *s.CommentMinLength > s.commentLength() {
 		return nil, fmt.Errorf("%s: comment-min-length %d exceeds comment-length %d",
 			Name, *s.CommentMinLength, s.commentLength())
+	}
+	// A negative overrun would report a lone line the fill itself writes.
+	if s.CommentOverrun != nil && *s.CommentOverrun < 0 {
+		return nil, fmt.Errorf("%s: comment-overrun must not be negative, got %d", Name, *s.CommentOverrun)
 	}
 	// Every string opens with the empty prefix, so listing it would exempt every
 	// comment there is and leave comment-wrap enforced but silent.

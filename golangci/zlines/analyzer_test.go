@@ -31,6 +31,13 @@ const bandedComment = "package p\n" +
 	"// zeta eta theta\n" +
 	"type banded struct{}\n"
 
+// loneComment is a paragraph of one line reaching 82 columns, two past
+// the default limit and inside the default overrun.
+const loneComment = "package p\n" +
+	"\n" +
+	"// this single line of prose runs a couple of columns past the eighty column limit\n" +
+	"type lone struct{}\n"
+
 var _ = Describe("Analyzer", func() {
 	It("is named for the linter", func() {
 		Expect(zlines.NewAnalyzer(zlines.Settings{}).Name).To(Equal(zlines.Name))
@@ -97,6 +104,18 @@ var _ = Describe("Analyzer", func() {
 	It("tolerates breaks inside the band, and polices its edges", func() {
 		analysistest.RunWithSuggestedFixes(GinkgoT(), analysistest.TestData(),
 			zlines.NewAnalyzer(zlines.Settings{}), "banded")
+	})
+
+	It("gives a paragraph of one line the overrun, and a longer one nothing", func() {
+		analysistest.RunWithSuggestedFixes(GinkgoT(), analysistest.TestData(),
+			zlines.NewAnalyzer(zlines.Settings{}), "overrun")
+	})
+
+	It("holds a paragraph of one line to the limit when the overrun is zero", func() {
+		Expect(analyze(zlines.NewAnalyzer(zlines.Settings{}), loneComment).messages()).To(BeEmpty())
+		Expect(analyze(zlines.NewAnalyzer(zlines.Settings{CommentOverrun: new(0)}), loneComment).messages()).
+			To(ConsistOf(string(zlines.RuleCommentWrap) +
+				": comment wraps over 1 lines; filled to 80 columns it takes 2"))
 	})
 
 	It("derives the minimum from the comment length, ten columns under it", func() {

@@ -89,6 +89,15 @@
 // however short it leaves the line. The last line of a paragraph only holds
 // the remainder, so no minimum applies to it.
 //
+// A paragraph of one line is given comment-overrun columns past the limit.
+// Filling such a line only hands its last word down to a line of its own,
+// and where a longer paragraph headed that way has a way out inside the limit —
+// an earlier break moved left within the band gives the last line company —
+// a single line has no break to move. So it may run a little past the limit
+// rather than split, and past the overrun it is filled like any other. A longer
+// paragraph is never given the overrun, whatever its last line would be left
+// holding.
+//
 // The fix fills the paragraph greedily to comment-length and writes the line
 // breaks that gives it, so the accepted forms are many but the fixed one
 // is always the same. The line breaks inside a paragraph are taken to carry
@@ -142,9 +151,9 @@
 // shorter than the limit would allow. The band does not loosen this: a break
 // after such a word is reported at any width, except where no line below
 // could hold it beside the word it belongs with, which is the one place
-// the fill leaves such a break itself. Nothing else about the fill
-// is negotiable: a word too wide for the limit still takes a line of its own
-// and overruns it, there being nowhere to break it.
+// the fill leaves such a break itself. The fill bends for nothing else: a word
+// too wide for the limit still takes a line of its own and overruns it, there
+// being nowhere to break it.
 //
 // # Settings
 //
@@ -153,10 +162,13 @@
 // instead, which defaults to [DefaultCommentLength]: prose and code are wrapped
 // to different measures for different reasons, and a repository that holds code
 // to 120 columns rarely wants its sentences that wide. The band's lower edge
-// is comment-min-length, which an absent key derives as [DefaultCommentSlack]
-// short of the length so that one key moves both edges; a minimum equal
-// to the length asks for the exact fill back. Every rule is enforced unless
-// a repository says otherwise, and each has a key of its own to say it with:
+// is comment-min-length, which an absent key derives
+// as [DefaultCommentUnderfill] short of the length so that one key moves both
+// edges; a minimum equal to the length asks for the exact fill back.
+// A paragraph of one line may run comment-overrun columns past the length,
+// which defaults to [DefaultCommentOverrun]; zero holds it to the length like
+// any other. Every rule is enforced unless a repository says otherwise,
+// and each has a key of its own to say it with:
 //
 //	settings:
 //	  custom:
@@ -166,6 +178,7 @@
 //	        line-length: 160
 //	        comment-length: 80
 //	        comment-min-length: 70
+//	        comment-overrun: 10
 //	        signature-wrap: false
 //	        body-collapse: false
 //	        comment-wrap: false

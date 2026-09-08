@@ -1,0 +1,38 @@
+package overrun
+
+// Each want comment sits alone: two side by side would be a paragraph to fill.
+
+// A paragraph of one line is given the overrun past the limit: filling it would
+// only hand its last word down to a line of its own.
+
+// this single line of prose runs a couple of columns past the eighty column limit
+type tolerated struct{}
+
+// this single line of prose stops exactly at the very outermost column the overrun admits
+type edge struct{}
+
+// want +2 `comment-wrap: .* over 1 lines; .* takes 2`
+
+// this single line of prose reaches one column beyond the farthest the overrun encompasses
+type past struct{}
+
+// A summary line above a blank //-line is a paragraph of one line and is given it.
+//
+// The paragraph under it is held to the limit like any other, and its lines sit
+// inside the band.
+type documented struct{}
+
+// A list item is a paragraph of its own, so one written on a single line gets
+// the overrun as well:
+//
+//   - an item written on one line runs a little past the limit the way prose does
+type listed struct{}
+
+// A longer paragraph is never given the overrun: an earlier break can move
+// inside the band to give its last line company.
+
+// want +2 `comment-wrap: .* over 2 lines; .* takes 3`
+
+// the first line of this paragraph closes well inside the band of the pair
+// while the second reaches two past the limit, which holds every line of them all
+type refused struct{}

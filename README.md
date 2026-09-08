@@ -73,6 +73,7 @@ linters:
           line-length: 160        # default 120, matching lll
           comment-length: 80      # default 80
           comment-min-length: 70  # default: 10 under comment-length
+          comment-overrun: 10     # default 10
           signature-wrap: false   # default true
           body-collapse: false    # default true
           comment-wrap: false     # default true
@@ -89,6 +90,12 @@ below it; a line short of the minimum is reported only when the next word
 would still have fit, and a break after a joining word ("the", "of") is
 reported at any width. Setting the minimum equal to the length restores the
 exact greedy fill.
+
+A paragraph of one line may run `comment-overrun` columns past
+`comment-length` rather than shed its last word onto a line of its own. A
+longer paragraph never may: it can move an earlier break inside the band to
+give its last line company, and a single line has no break to move. Set the
+overrun to 0 for a hard limit.
 
 ### deadcode
 
