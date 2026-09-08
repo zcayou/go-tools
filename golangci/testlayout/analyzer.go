@@ -21,7 +21,8 @@ type Rule string
 
 const (
 	// RuleTestPackage fires on a test file of a kind the settings do not allow:
-	// a white-box file where only black-box files may be, or the reverse.
+	// a white-box file where only black-box files may be, or the reverse,
+	// or a standalone file where every test file sits beside a source.
 	RuleTestPackage Rule = "test-package"
 
 	// RuleTestFileName fires on a test file whose name no pattern for its kind
@@ -59,11 +60,12 @@ const testSuffix = "_test.go"
 const analyzerDoc = `checks that test files follow the repository's test-suite layout conventions
 
 A test file is white-box or black-box depending on whether it declares the
-package under test or the external <pkg>_test package, and each kind is allowed
-or not and named after a configured set of patterns. A file named for a source
-file carries the specs for it; a file named for a supporting role carries no
-specs. Where Ginkgo is used, the adapter that calls RunSpecs sits in a file
-reserved for it, and it exists.`
+package under test or the external <pkg>_test package, or standalone where its
+directory holds no source to test; each kind is allowed or not and named after
+a configured set of patterns. A file named for a source file carries the specs
+for it; a file named for a supporting role carries no specs. Where Ginkgo is
+used, the adapter that calls RunSpecs sits in a file reserved for it, and it
+exists.`
 
 // NewAnalyzer builds the analyzer that enforces the layout conventions under
 // settings. It fails on settings no file could satisfy.
@@ -92,14 +94,18 @@ func (c *checker) run(pass *analysis.Pass) (any, error) {
 	}
 
 	// Every file of a package sits in one directory, so the first is as good
-	// as any for naming it.
+	// as any for naming it. A source file that will not parse leaves
+	// the directory's kind unknown, and the driver has already reported it.
 	dir, err := readDirectory(filepath.Dir(own[0].path))
-	if err != nil {
+	switch {
+	case errors.Is(err, errUnparsed):
+		return nil, nil
+	case err != nil:
 		return nil, err
 	}
 
 	for _, file := range own {
-		if !c.checkFile(pass, file, dir.sources) {
+		if !c.checkFile(pass, file, dir) {
 			continue
 		}
 		c.checkAdapterFile(pass, file, dir.sources)
@@ -113,25 +119,24 @@ func (c *checker) run(pass *analysis.Pass) (any, error) {
 // that may not exist is reported once and left there: neither the name
 // it should have had nor what it holds says anything useful about a file
 // that should not be present.
-func (c *checker) checkFile(pass *analysis.Pass, file testFile, srcs sources) bool {
-	category := c.config.category(file.blackbox)
+func (c *checker) checkFile(pass *analysis.Pass, file testFile, dir directory) bool {
+	category := c.config.category(file, dir)
 
 	if !category.allowed {
 		report(pass, file.syntax.Package, RuleTestPackage, fmt.Sprintf(
-			"%s test files are not allowed; declare package %s",
-			category.name, otherPackage(file.syntax.Name.Name)))
+			"%s test files are not allowed; %s", category.name, category.forbidden(file.syntax.Name.Name)))
 		return false
 	}
 
 	// Helper patterns are consulted first, so a helpers.go sitting beside
 	// helpers_test.go does not turn it into a file owing specs.
 	switch {
-	case category.helpers.matches(file.name, srcs):
+	case category.helpers.matches(file.name, dir.sources):
 		if file.info.specs {
 			report(pass, file.syntax.Package, RuleSpecsInHelperFile,
 				"a file named for its supporting role carries specs; "+category.specsBelong())
 		}
-	case category.specs.matches(file.name, srcs):
+	case category.specs.matches(file.name, dir.sources):
 		if !file.info.specs {
 			report(pass, file.syntax.Package, RuleSpecLessTestFile,
 				"no specs or test functions; "+category.helpersBelong())

@@ -143,6 +143,26 @@ var _ = Describe("Analyzer", func() {
 			Whitebox: &testlayout.Category{Allowed: new(true)},
 		}, "unparsable")
 	})
+
+	It("accepts scenario-named specs in a directory holding no source", func() {
+		runAnalysis(testlayout.Settings{}, "standalone")
+	})
+
+	It("keeps a directory standalone under a doc.go that declares nothing", func() {
+		runAnalysis(testlayout.Settings{}, "standalonedoc")
+	})
+
+	It("reports every test file of a standalone directory where the kind may not exist", func() {
+		runAnalysis(testlayout.Settings{
+			Standalone: &testlayout.Category{Allowed: new(false)},
+		}, "standalonedenied")
+	})
+
+	It("holds a standalone directory to its own name patterns and to the adapter rules", func() {
+		runAnalysis(testlayout.Settings{
+			Standalone: &testlayout.Category{Patterns: []string{"*_integration_test.go"}},
+		}, "standalonenames")
+	})
 })
 
 // runAnalysis drives the analyzer over testdata/src/<pattern> and asserts

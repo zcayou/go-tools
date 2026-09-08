@@ -3,13 +3,14 @@ package testlayout
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 )
 
 // directory is the on-disk view of one package directory: the source files
-// a [sourceToken] pattern resolves against, and the name of every test file
-// sitting in it.
+// a [sourceToken] pattern resolves against, whether they leave anything
+// to test, and the name of every test file sitting in it.
 //
 // It is read from disk rather than taken from the pass because a pass holds one
 // test package. A directory's internal and external test packages are separate
@@ -18,6 +19,11 @@ import (
 type directory struct {
 	path    string
 	sources sources
+
+	// standalone reports that the directory holds no source to test: every file
+	// in sources declares nothing, as a doc.go does. A test file there
+	// is the standalone kind, whatever package it declares.
+	standalone bool
 
 	// tests are the test file names, in the order [os.ReadDir] returns them, which
 	// is sorted. That is what makes the file a missing adapter is reported against
@@ -45,6 +51,12 @@ func readDirectory(path string) (directory, error) {
 			dir.sources = append(dir.sources, name)
 		}
 	}
+
+	standalone, err := dir.sources.declareNothing(path)
+	if err != nil {
+		return directory{}, err
+	}
+	dir.standalone = standalone
 	return dir, nil
 }
 
@@ -58,6 +70,26 @@ func (s sources) declares(base string) bool {
 	return slices.ContainsFunc(s, func(name string) bool {
 		return name == base+".go" || isBuildVariant(name, base)
 	})
+}
+
+// declareNothing reports whether no source file in the directory at path holds
+// a declaration, which is what leaves nothing to test. A doc.go carrying only
+// a package clause declares nothing. A file carrying only an import does not
+// count as nothing: a side-effect import makes the package do something,
+// and a package that does something is a package under test. The walk stops
+// at the first file that declares, so a directory with real sources costs
+// one parse.
+func (s sources) declareNothing(path string) (bool, error) {
+	for _, name := range s {
+		file, err := parsePath(filepath.Join(path, name))
+		if err != nil {
+			return false, err
+		}
+		if len(file.Decls) > 0 {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // isBuildVariant reports whether name is base under a GOOS or GOARCH file-name

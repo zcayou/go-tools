@@ -22,12 +22,14 @@ reference for its rules; the sections below cover configuration.
 
 ### testlayout
 
-Sorts every test file into one of two kinds by the package it declares —
-white-box files declare the package under test, black-box files declare the
-external `<pkg>_test` package — and checks which kinds are allowed and what
-each may be named. Patterns are globs, except that `<source>` stands for the
-base name of a source file in the same directory. The defaults allow black-box
-files only:
+Sorts every test file into one of three kinds and checks which kinds are
+allowed and what each may be named. Beside a source, the package a file
+declares decides — white-box files declare the package under test, black-box
+files declare the external `<pkg>_test` package. In a directory holding no
+source to test, such as an integration suite, a file is standalone and named
+for what it exercises. Patterns are globs, except that `<source>` stands for
+the base name of a source file in the same directory. The defaults allow
+black-box files beside a source and standalone files where there is none:
 
 ```yaml
 linters:
@@ -41,6 +43,10 @@ linters:
           blackbox:
             allowed: true
             patterns: ['<source>_test.go', suite_test.go]
+            helper-patterns: [helpers_test.go, fakes_test.go]
+          standalone:
+            allowed: true
+            patterns: ['*_test.go']
             helper-patterns: [helpers_test.go, fakes_test.go]
           adapter-patterns: [suite_test.go]
 ```

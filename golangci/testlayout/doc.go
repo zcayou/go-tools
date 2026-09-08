@@ -1,12 +1,14 @@
 // Package testlayout checks that test files follow the repository's test-suite
 // layout conventions.
 //
-// A test file is one of two kinds, and which one is not a matter of opinion:
-// it is decided by the package the file declares. A white-box file declares
-// the package under test and can reach its unexported identifiers; a black-box
-// file declares the external <pkg>_test package and sees only what a consumer
-// sees. Settings say which kinds a repository allows and what a file of each
-// kind may be named, and the rules follow from that.
+// A test file is one of three kinds, and which one is not a matter of opinion.
+// Beside a source, the package the file declares decides: a white-box file
+// declares the package under test and can reach its unexported identifiers,
+// and a black-box file declares the external <pkg>_test package and sees only
+// what a consumer sees. In a directory holding no source to test there
+// is nothing to be inside or outside of, and the file is standalone. Settings
+// say which kinds a repository allows and what a file of each kind may
+// be named, and the rules follow from that.
 //
 // # Rules
 //
@@ -52,6 +54,30 @@
 // are matched by name, so a dot-imported Describe and a ginkgo.Describe count
 // alike, and no import is resolved to find out.
 //
+// # The standalone package
+//
+// An integration or end-to-end suite commonly lives in a directory of its own
+// holding nothing but test files, with any shared harness in a separate package
+// it imports. Such a directory has no package under test: the white-box
+// and black-box distinction is empty there, and no name can be named
+// for the source it exercises. Its files are the standalone kind, named
+// for what they exercise, and the standalone category carries their patterns.
+// A pattern holding <source> is refused in that category, since it could match
+// nothing a standalone file should be called.
+//
+// A directory is standalone when every source file in it declares nothing.
+// A doc.go holding only a package clause keeps it so: saying how to run
+// the suite is what such a file is for, and it is what lets go build and go doc
+// accept the directory. A file holding only an import does not: a side-effect
+// import makes the package do something, and a package that does something
+// is a package under test. Whether the package name carries the _test suffix
+// is not judged; both spellings compile and both are in wide use.
+//
+// The other rules hold in a standalone directory as they hold anywhere:
+// a helper file carries no specs, the adapter sits in a file reserved
+// for it and exists once, and a suite file holds nothing beyond its reason
+// for existing.
+//
 // # The Ginkgo adapter
 //
 // The adapter is the go test entry point that calls RunSpecs and hands
@@ -83,7 +109,7 @@
 //
 // [Settings] carries a [Category] for each kind, and the names reserved
 // for the adapter. Absent keys take the defaults, which allow black-box files
-// only:
+// beside a source and standalone files where there is none:
 //
 //	whitebox:
 //	  allowed: false
@@ -91,24 +117,30 @@
 //	  allowed: true
 //	  patterns: ['<source>_test.go', suite_test.go]
 //	  helper-patterns: [helpers_test.go, fakes_test.go]
+//	standalone:
+//	  allowed: true
+//	  patterns: ['*_test.go']
+//	  helper-patterns: [helpers_test.go, fakes_test.go]
 //	adapter-patterns: [suite_test.go]
 //
 // An absent pattern list takes its default; an explicitly empty one allows
 // nothing, which is how a repository says it wants no helper files at all.
-// A configuration no file could satisfy — a malformed glob, a pattern holding
-// a path separator or a glob around <source>, a pattern naming the source
-// twice, an allowed category with no name available to it, an empty
-// adapter-patterns, neither kind allowed — fails the run rather than silently
-// matching nothing.
+// Disallowing the standalone kind is how a repository says every test sits
+// beside the code it exercises. A configuration no file could satisfy —
+// a malformed glob, a pattern holding a path separator or a glob around
+// <source>, a pattern naming the source twice or naming it at all
+// for the standalone kind, an allowed category with no name available to it,
+// an empty adapter-patterns, no kind allowed — fails the run rather than
+// silently matching nothing.
 //
 // # What this linter does not decide
 //
 // Which directories the conventions apply to is golangci-lint's to answer, not
-// this linter's. A tree of integration suites that keeps its own layout,
-// or a directory of build tooling in package main, is excluded through
-// linters.exclusions.paths like anything else, so the settings here carry no
-// path list of their own. Note also that run.tests, which a plugin cannot read,
-// decides whether this linter sees any test files at all.
+// this linter's. A directory of build tooling in package main, or a tree
+// that keeps a layout of its own, is excluded through linters.exclusions.paths
+// like anything else, so the settings here carry no path list of their own.
+// Note also that run.tests, which a plugin cannot read, decides whether this
+// linter sees any test files at all.
 //
 // # Entry points
 //

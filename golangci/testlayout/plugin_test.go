@@ -81,13 +81,47 @@ var _ = Describe("Plugin", func() {
 		Expect(err).To(MatchError(ContainSubstring("adapter-patterns is empty")))
 	})
 
-	It("rejects both categories being disallowed, which no test file could satisfy", func() {
+	It("rejects every category being disallowed, which no test file could satisfy", func() {
+		_, err := testlayout.New(map[string]any{
+			"whitebox":   map[string]any{"allowed": false},
+			"blackbox":   map[string]any{"allowed": false},
+			"standalone": map[string]any{"allowed": false},
+		})
+
+		Expect(err).To(MatchError(ContainSubstring("no kind of test file is allowed")))
+	})
+
+	It("accepts tests confined to standalone packages, with neither kind beside a source allowed", func() {
 		_, err := testlayout.New(map[string]any{
 			"whitebox": map[string]any{"allowed": false},
 			"blackbox": map[string]any{"allowed": false},
 		})
 
-		Expect(err).To(MatchError(ContainSubstring("neither whitebox nor blackbox is allowed")))
+		Expect(err).NotTo(HaveOccurred())
+	})
+
+	It("rejects a malformed standalone pattern rather than leaving it matching nothing", func() {
+		_, err := testlayout.New(map[string]any{
+			"standalone": map[string]any{"patterns": []string{"[_test.go"}},
+		})
+
+		Expect(err).To(MatchError(ContainSubstring("standalone.patterns")))
+	})
+
+	It("rejects the source token in standalone patterns, which name no source", func() {
+		_, err := testlayout.New(map[string]any{
+			"standalone": map[string]any{"patterns": []string{"<source>_test.go"}},
+		})
+
+		Expect(err).To(MatchError(ContainSubstring("standalone.patterns")))
+	})
+
+	It("rejects the source token in standalone helper patterns, which name no source", func() {
+		_, err := testlayout.New(map[string]any{
+			"standalone": map[string]any{"helper-patterns": []string{"<source>_helpers_test.go"}},
+		})
+
+		Expect(err).To(MatchError(ContainSubstring("standalone.helper-patterns")))
 	})
 
 	It("rejects a category allowed under no name at all", func() {

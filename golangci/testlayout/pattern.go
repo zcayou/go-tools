@@ -102,3 +102,16 @@ func (ps patternSet) String() string {
 	}
 	return strings.Join(texts, ", ")
 }
+
+// noSource rejects a pattern resolving [sourceToken] in a set naming files
+// that sit beside no source. key is the setting the set came from,
+// for the error to point at.
+func (ps patternSet) noSource(key string) error {
+	for _, p := range ps {
+		if p.source {
+			return fmt.Errorf("%s: pattern %q: %s names a source file, and no file of this kind is named for one",
+				key, p.text, sourceToken)
+		}
+	}
+	return nil
+}

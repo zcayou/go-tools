@@ -36,10 +36,11 @@ var testFuncPrefixes = []string{"Test", "Benchmark", "Fuzz", "Example"}
 // two do.
 const runSpecs = "RunSpecs"
 
-// errUnparsed marks a test file the pass does not hold that will not parse.
-// What such a file declares is unknown, and the safe reading of an unknown file
-// is that it might hold the adapter.
-var errUnparsed = errors.New("test file does not parse")
+// errUnparsed marks a file the pass does not hold that will not parse. What
+// such a file declares is unknown: a test file might hold the adapter,
+// and a source file might leave its directory with something to test, so
+// nothing is said.
+var errUnparsed = errors.New("file does not parse")
 
 // info is what one test file's syntax tells the layout rules.
 type info struct {
@@ -77,24 +78,33 @@ func inspect(file *ast.File) info {
 	return found
 }
 
-// inspectPath reads a test file the pass does not hold. Reading goes through
-// the filesystem rather than [analysis.Pass.ReadFile], which serves only
-// the files of its own pass. A file that will not parse yields [errUnparsed]:
-// the driver reports the syntax error against the package holding the file,
-// and that package is skipped, so this pass is the one left judging a file
-// it cannot read.
+// inspectPath reads a test file the pass does not hold.
+func inspectPath(path string) (info, error) {
+	file, err := parsePath(path)
+	if err != nil {
+		return info{}, err
+	}
+	return inspect(file), nil
+}
+
+// parsePath parses a file the pass does not hold from the directory
+// it is analyzing. Reading goes through the filesystem rather than
+// [analysis.Pass.ReadFile], which serves only the files of its own pass. A file
+// that will not parse yields [errUnparsed]: the driver reports the syntax error
+// against the package holding the file, and that package is skipped, so this
+// pass is the one left judging a file it cannot read.
 //
 // [analysis.Pass.ReadFile]: https://pkg.go.dev/golang.org/x/tools/go/analysis#Pass.ReadFile
-func inspectPath(path string) (info, error) {
-	src, err := os.ReadFile(path) //nolint:gosec // the path is a test file in a directory the pass is already analyzing
+func parsePath(path string) (*ast.File, error) {
+	src, err := os.ReadFile(path) //nolint:gosec // the path is a file in a directory the pass is already analyzing
 	if err != nil {
-		return info{}, fmt.Errorf("reading %s: %w", path, err)
+		return nil, fmt.Errorf("reading %s: %w", path, err)
 	}
 	file, err := parser.ParseFile(token.NewFileSet(), path, src, parser.SkipObjectResolution)
 	if err != nil {
-		return info{}, fmt.Errorf("%s: %w", path, errUnparsed)
+		return nil, fmt.Errorf("%s: %w", path, errUnparsed)
 	}
-	return inspect(file), nil
+	return file, nil
 }
 
 func isTestFuncName(name string) bool {
