@@ -260,6 +260,17 @@ var _ = Describe("Analyze", func() {
 				"main.go:14:12: unused exported method: Dog.Bark",
 			}))
 		})
+
+		It("roots nothing for a credit whose bind only tests reach", func(ctx SpecContext) {
+			// describe binds Label to fmt.Stringer in production code, and only the test
+			// calls describe. The bind spares String's own verdict in the masked view,
+			// and no more: rooting String would carry render out of the family
+			// on the strength of a conversion nothing but a test runs.
+			Expect(analyzeWith(ctx, "testbind", engine.Config{Tests: true})).To(Equal([]string{
+				"main.go:13:6: test-only unreachable func: render",
+				"main.go:15:6: test-only unreachable func: describe",
+			}))
+		})
 	})
 
 	Describe("a contract a test file declares", func() {
@@ -518,10 +529,13 @@ var _ = Describe("Analyze", func() {
 				Expect(analyzeWith(ctx, "apigenerics", generic(engine.GenericRootingSkip))).To(Equal([]string{
 					"lib/lib.go:55:6: unreachable func: rareHelper",
 					"lib/lib.go:63:6: unreachable func: orphan",
+					"lib/lib.go:93:6: unreachable func: pendingHelper",
 					"lib/lib.go:33:6: test-only unreachable func: retain",
 					"lib/lib.go:35:6: test-only unreachable func: prepare",
 					"lib/lib.go:37:6: test-only unreachable func: observe",
 					"lib/lib.go:45:6: test-only unreachable func: auditHelper",
+					"lib/lib.go:74:19: test-only unreachable func: Value.source",
+					"lib/lib.go:84:6: test-only unreachable func: fakeHelper",
 				}))
 			})
 
@@ -530,8 +544,9 @@ var _ = Describe("Analyze", func() {
 				// that instantiations are gathered from the whole program.
 				Expect(analyzeWith(ctx, "apigenerics", generic(engine.GenericRootingInstantiated))).To(Equal([]string{
 					"lib/lib.go:63:6: unreachable func: orphan",
-					"lib/lib.go:60:6: unmeasured exported generic: Opaque",
+					"lib/lib.go:60:6: unmeasured generic: Opaque",
 					"lib/lib.go:45:6: test-only unreachable func: auditHelper",
+					"lib/lib.go:84:6: test-only unreachable func: fakeHelper",
 				}))
 			})
 
@@ -560,7 +575,40 @@ var _ = Describe("Analyze", func() {
 				// of the verdict is that an exempt declaration would otherwise go
 				// unmentioned.
 				Expect(analyzeWith(ctx, "apigenerics", generic(engine.GenericRootingInstantiated))).
-					To(ContainElement("lib/lib.go:60:6: unmeasured exported generic: Opaque"))
+					To(ContainElement("lib/lib.go:60:6: unmeasured generic: Opaque"))
+			})
+
+			It("walks an exported method of a generic type nothing instantiates", func(ctx SpecContext) {
+				// x/tools builds no method value for a parameterized receiver, so Pending's
+				// method set yields nothing to walk; Count is found through its
+				// declaration.
+				Expect(analyzeWith(ctx, "apigenerics", generic(engine.GenericRootingInstantiated))).
+					NotTo(ContainElement(ContainSubstring("pendingHelper")))
+			})
+
+			It("weighs a sealed contract against the test's instantiation in the masked view too", func(ctx SpecContext) {
+				// Source is concrete only where the test's call makes it so. Which type
+				// argument a consumer picks says nothing about who holds the interface —
+				// the reading instantiated rooting takes of the same test — so Value.source
+				// is credited in both views rather than drawing the test-only family.
+				Expect(analyzeWith(ctx, "apigenerics", generic(engine.GenericRootingInstantiated))).
+					NotTo(ContainElement(ContainSubstring("Value.source")))
+			})
+
+			It("lets no test's instantiation shape a sealed contract under skip", func(ctx SpecContext) {
+				// skip declines the reading altogether: in the masked view Source
+				// is instantiated nowhere, so Value.source is what only the test keeps
+				// alive.
+				Expect(analyzeWith(ctx, "apigenerics", generic(engine.GenericRootingSkip))).
+					To(ContainElement("lib/lib.go:74:19: test-only unreachable func: Value.source"))
+			})
+
+			It("roots no credited method whose body the masked view counts as test code", func(ctx SpecContext) {
+				// The seal credits the test's fake in both views, and a credited method
+				// is a root. Rooted in the masked view, the fake would carry fakeHelper
+				// back out of the test-only family.
+				Expect(analyzeWith(ctx, "apigenerics", generic(engine.GenericRootingInstantiated))).
+					To(ContainElement("lib/lib.go:84:6: test-only unreachable func: fakeHelper"))
 			})
 
 			It("still draws the test-only family on what no instantiation reaches", func(ctx SpecContext) {
@@ -622,11 +670,46 @@ var _ = Describe("Analyze", func() {
 				// and a sealing method is unexported by construction. Tagged.input proves
 				// the credit reaches a generic receiver, and Binding.Name that a sealed
 				// interface credits the exported methods a consumer holding it can call.
+				// What the credited methods call is live with them, and Lazy.input
+				// is the one whose calls the analysis could not follow.
 				Expect(analyzeWith(ctx, "sealedsurface", sealed("./..."))).To(Equal([]string{
 					"lib/lib.go:40:20: unreachable func: halfBound.bound",
 					"lib/lib.go:56:19: unreachable func: IntTaken.taken",
 					"lib/lib.go:52:39: unused interface method: Untaken.taken",
+					"lib/lib.go:93:18: unmeasured generic: Lazy.input",
 				}))
+			})
+
+			It("reaches what a credited method calls", func(ctx SpecContext) {
+				// Ref.input runs whenever a consumer's Consume does, and RTA sees neither
+				// the conversion nor the dispatch. Its credit spares the method's own
+				// verdict; rooting it is what spares canonical.
+				Expect(analyzeWith(ctx, "sealedsurface", sealed("./..."))).
+					NotTo(ContainElement(ContainSubstring("canonical")))
+			})
+
+			It("walks a credited method nothing instantiates for what it calls", func(ctx SpecContext) {
+				// No Tagged is ever built here, so its credited input has no concrete body
+				// to root. Its generic body calls tagID whatever a consumer instantiates
+				// it with, the way an uninstantiated generic on the surface is walked.
+				Expect(analyzeWith(ctx, "sealedsurface", sealed("./..."))).
+					NotTo(ContainElement(ContainSubstring("tagID")))
+			})
+
+			It("names a credited method it could not follow, unexported as it is", func(ctx SpecContext) {
+				// Lazy.input calls through a function value, which a walk cannot follow
+				// without an instantiation's type flow. The verdict that says so names
+				// an unexported method as readily as the surface's own generics.
+				Expect(analyzeWith(ctx, "sealedsurface", sealed("./..."))).
+					To(ContainElement("lib/lib.go:93:18: unmeasured generic: Lazy.input"))
+			})
+
+			It("holds each implementation behind the seal for the other credits to find", func(ctx SpecContext) {
+				// Install asserts what it was handed to carrier. The consumer's conversion
+				// to Supplier is what puts a Group behind an interface, so the assertion
+				// finds Group.carried the way it finds a converted operand.
+				Expect(analyzeWith(ctx, "sealedsurface", sealed("./..."))).
+					NotTo(ContainElement(ContainSubstring("Group.carried")))
 			})
 
 			It("credits by satisfaction rather than by method name", func(ctx SpecContext) {

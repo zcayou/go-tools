@@ -31,9 +31,9 @@ func (s *instantiations) Vectors(obj types.Object) [][]types.Type {
 	return s.vectors(obj)
 }
 
-// NewEvidence exposes newEvidence.
+// NewEvidence exposes newEvidence, with no declared surface to seal anything.
 var NewEvidence = func(prog *ssa.Program, inst *instantiations) *evidence {
-	return newEvidence(prog, inst, view{})
+	return newEvidence(prog, inst, &sealedSurface{}, view{})
 }
 
 // Materialized exposes evidence.materialized.

@@ -44,6 +44,24 @@ func (v view) admitsRoots(pkg *packages.Package) bool {
 	return !v.masked || (!testVariant(pkg) && !v.testFacing[pkg.PkgPath])
 }
 
+// admitsFunction reports whether fn's own declaration counts under the view:
+// written in a file it admits, in a package it admits. An instantiation
+// belongs to no package, so the generic it was instantiated from answers
+// for it, whose position the instantiation already carries.
+func (v view) admitsFunction(fset *token.FileSet, fn *ssa.Function) bool {
+	if !v.masked {
+		return true
+	}
+	declared := fn
+	if origin := fn.Origin(); origin != nil {
+		declared = origin
+	}
+	if declared.Pkg != nil && !v.admitsPackage(declared.Pkg.Pkg.Path()) {
+		return false
+	}
+	return v.admitsFile(position(fset, fn.Pos()).Filename)
+}
+
 // admitsInstruction reports whether an instruction of fn counts as evidence.
 // The instruction's own position decides where one exists — code a test file
 // contributes to a shared package initializer carries its file's name there —

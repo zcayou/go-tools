@@ -57,8 +57,10 @@ type Settings struct {
 
 	// APIGenerics is how the declared surface's generic declarations are rooted:
 	// instantiated, the default, which roots the concrete instantiations
-	// the program builds of them, or skip, which roots none of them and so
-	// reports whatever a generic API alone reaches as unreachable. Requires API.
+	// the program builds of them and weighs the surface's sealed generic contracts
+	// against the same ones in both views, or skip, which roots none of them
+	// and so reports whatever a generic API alone reaches as unreachable. Requires
+	// API.
 	APIGenerics *string `json:"api-generics"`
 
 	// TestFacing are package patterns whose intended consumers are tests:

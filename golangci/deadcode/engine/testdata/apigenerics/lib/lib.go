@@ -61,3 +61,33 @@ func Opaque[V any](apply func(V) string, value V) string { return apply(value) }
 
 // orphan is reached by nothing, generic surface or otherwise.
 func orphan() {}
+
+// Source is sealed, so no package but lib implements it, and generic the way a typed handle is:
+// R names what a consumer projects, and the seal reads nothing of it. lib writes Source only
+// against Project's type parameter, so the one concrete Source in this module is the one the test
+// implies — which has to count in the masked view too, the way the test's instantiations root.
+type Source[R any] interface{ source() string }
+
+// Value is the handle a consumer builds and hands to Project.
+type Value[R any] struct{ id string }
+
+func (v Value[R]) source() string { return v.id }
+
+func NewValue[R any](id string) Value[R] { return Value[R]{id: id} }
+
+// Project reads a Source. Nothing here converts a Value to one: a consumer does, at the call.
+func Project[R any](s Source[R]) string { return s.source() }
+
+// fakeHelper is production code only the test's fake calls. The fake satisfies Source from a test
+// file, and what the seal credits it with must not root it in the masked view, where its body is
+// test code.
+func fakeHelper() string { return "fake" }
+
+// Pending is exported and generic, and nothing in the module instantiates it, so its exported
+// method has no concrete body any more than Rare does. Count is walked the way Rare is, and
+// pendingHelper is reachable through it.
+type Pending[V any] struct{ values []V }
+
+func (p Pending[V]) Count() int { return pendingHelper(len(p.values)) }
+
+func pendingHelper(count int) int { return count }

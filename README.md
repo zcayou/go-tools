@@ -146,10 +146,15 @@ type, because a consumer does that; and no exemption reaches the resulting
 verdict, since the exempt kinds cover the exported surface while the sealing
 method is unexported by construction. So an exported sealed interface in an
 `api` package credits its implementations, the way a dependency's interface
-does. It takes `api`: sealing on its own credits nothing. A generic sealed
-interface is weighed per instantiation the program builds, and one the program
-never instantiates credits nothing — the implementation and the contract are
-then reported as a pair.
+does, along with what follows from a consumer holding one: what the
+implementations call stays live, and an assertion from the sealed interface to
+another finds them. It takes `api`: sealing on its own credits nothing.
+A generic sealed interface is weighed per instantiation the program builds, and
+one the program never instantiates credits nothing — the implementation and the
+contract are then reported as a pair. Under the default `api-generics:
+instantiated` a test's instantiation counts in the `test-only` family's masked
+view as it does in the full one, for the reason it roots the surface there
+(below); under `skip` the masked view counts no test's instantiation.
 
 Where an interface is declared decides nothing about how it is weighed; whether
 the run loads it does. Binding a type to an interface credits that type's method
@@ -180,17 +185,19 @@ comes from the body. Instantiations therefore count wherever they were written,
 test files included — a library's own tests are usually the only code
 instantiating its public generics, and refusing them would leave the surface
 unrooted in precisely the masked view the `test-only` family asks about. What a
-type argument does decide is which of its own methods become runtime types, so a
-production method that only a test's type argument selects is credited rather
-than reported. That is the one thing this setting gives up; `skip` is how to
-decline it.
+type argument does decide is which of its own methods become runtime types, and
+which implementations a sealed generic contract matches, so a production method
+that only a test's type argument selects is credited rather than reported. That
+is the one thing this setting gives up; `skip` is how to decline it.
 
 A generic the program never instantiates has nothing to monomorphize, so its
 body is walked instead: the concrete functions it calls are rooted directly,
-because it calls them whatever a consumer instantiates it with. Where that walk
-meets a call it cannot resolve — through an interface or a function value — the
-generic is reported as `unmeasured exported generic` rather than letting what
-lies past it be called dead. That verdict is about the analysis, not the
+because it calls them whatever a consumer instantiates it with. The same walk
+covers a method the analysis credits — a sealed interface's implementation,
+say — on a generic type nothing instantiates. Where that walk meets a call it
+cannot resolve — through an interface or a function value — the generic is
+reported as `unmeasured generic` rather than letting what lies past it be
+called dead. That verdict is about the analysis, not the
 declaration, and no `api-exempt` kind covers it. It is reported by default,
 because an unfollowed edge is worth knowing about; silence it, if you must, the
 same way as any other rule:

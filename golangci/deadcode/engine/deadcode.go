@@ -57,11 +57,13 @@ type GenericRooting string
 
 const (
 	// GenericRootingSkip leaves generic declarations out of the root set, so
-	// what a generic API alone reaches is reported as unreachable.
+	// what a generic API alone reaches is reported as unreachable, and lets
+	// no test's instantiation stand in for a consumer's in the masked view.
 	GenericRootingSkip GenericRooting = "skip"
 	// GenericRootingInstantiated roots the concrete instantiations the program
 	// builds of that surface, which is what makes the code beneath a generic API
-	// measurable at all.
+	// measurable at all, and weighs its sealed generic contracts against the same
+	// instantiations in both views.
 	GenericRootingInstantiated GenericRooting = "instantiated"
 )
 
@@ -105,12 +107,13 @@ const (
 	// VerdictReflectionLiveMethod is an exported method reachability keeps alive
 	// only through reflection, with no source-level use behind it.
 	VerdictReflectionLiveMethod Verdict = "unused reflection-live exported method"
-	// VerdictUnmeasuredGeneric is an exported generic declaration the program
-	// never instantiates and whose body makes a call the analysis cannot resolve.
-	// It claims nothing about the declaration: it says the run could not follow
-	// what the declaration reaches, so an unreachable verdict anywhere past
-	// that call would be a guess.
-	VerdictUnmeasuredGeneric Verdict = "unmeasured exported generic"
+	// VerdictUnmeasuredGeneric is a generic entry point — a declaration
+	// on the declared surface, or a method participation credits —
+	// that the program never instantiates and whose body makes a call the analysis
+	// cannot resolve. It claims nothing about the declaration: it says the run
+	// could not follow what the declaration reaches, so an unreachable verdict
+	// anywhere past that call would be a guess.
+	VerdictUnmeasuredGeneric Verdict = "unmeasured generic"
 )
 
 // Config is one analysis request. The zero value analyzes ./... in the working
@@ -147,8 +150,9 @@ type Config struct {
 	// reaches stays live.
 	APIExempt []Kind
 
-	// APIGenerics is how the declared surface's generic declarations are rooted.
-	// It requires API, and defaults to [GenericRootingInstantiated]. Set
+	// APIGenerics is how the declared surface's generic declarations are rooted,
+	// and whether a test's instantiation stands in for a consumer's in the masked
+	// view. It requires API, and defaults to [GenericRootingInstantiated]. Set
 	// it to [GenericRootingSkip] to root only what Rapid Type Analysis takes
 	// directly, which reports whatever a generic API alone reaches as unreachable.
 	APIGenerics GenericRooting
@@ -238,6 +242,12 @@ func Analyze(ctx context.Context, cfg Config) ([]Finding, error) {
 
 	facts := newFileFacts(pkgs)
 	methodDecls := newMethodScan(pkgs, facts)
+	// Every instantiation the program writes, test files included. The full view
+	// reads it as its own, and under instantiated rooting the sealed surface reads
+	// it in both: which type argument a consumer picks says nothing about who
+	// holds the interface.
+	whole := newInstantiations(pkgs, view{})
+	sealed := newSealedSurface(surface, whole, pkgs)
 
 	prog, ssaPkgs := ssautil.Packages(pkgs, ssa.InstantiateGenerics)
 	prog.Build()
@@ -245,7 +255,7 @@ func Analyze(ctx context.Context, cfg Config) ([]Finding, error) {
 		return nil, err
 	}
 
-	full, err := evaluate(ctx, prog, ssaPkgs, pkgs, surface, facts, methodDecls, cfg.Tests, view{})
+	full, err := evaluate(ctx, prog, ssaPkgs, pkgs, surface, facts, methodDecls, whole, sealed, cfg.Tests, view{})
 	if err != nil {
 		return nil, err
 	}
@@ -262,8 +272,14 @@ func Analyze(ctx context.Context, cfg Config) ([]Finding, error) {
 	// a program whose only entry points are tests has nothing to root at once they
 	// are set aside, and [ErrNoRoots] holds that reachability is then undefined
 	// rather than empty — an empty family would read as all clear.
-	masked, err := evaluate(ctx, prog, ssaPkgs, pkgs, surface, facts, methodDecls, false,
-		view{masked: true, testFacing: declared.packages})
+	mask := view{masked: true, testFacing: declared.packages}
+	maskedInst := newInstantiations(pkgs, mask)
+	// Under skip nothing a test instantiates stands in for a consumer, so
+	// the sealed surface's generic contracts are weighed against the view's own.
+	if !surface.rootsInstantiations() {
+		sealed = newSealedSurface(surface, maskedInst, pkgs)
+	}
+	masked, err := evaluate(ctx, prog, ssaPkgs, pkgs, surface, facts, methodDecls, maskedInst, sealed, false, mask)
 	if err != nil {
 		return nil, fmt.Errorf("analyzing test-only liveness: %w", err)
 	}
@@ -307,7 +323,9 @@ func loadProgram(ctx context.Context, cfg Config, dir string, load *packages.Con
 }
 
 // evaluate runs every verdict pass over the built program under one evidence
-// view and returns the surface-filtered findings in report order.
+// view and returns the surface-filtered findings in report order. inst
+// is the instantiations the view admits, and sealed the sealed surface
+// it weighs.
 func evaluate(
 	ctx context.Context,
 	prog *ssa.Program,
@@ -316,6 +334,8 @@ func evaluate(
 	surface *apiSurface,
 	facts map[*packages.Package]fileFacts,
 	methodDecls *methodScan,
+	inst *instantiations,
+	sealed *sealedSurface,
 	tests bool,
 	v view,
 ) ([]declaration, error) {
@@ -325,14 +345,13 @@ func evaluate(
 	deadTypes := unreferencedTypes(idents, surface)
 
 	// Whether the program can hold a type behind an interface is evidence every
-	// credit gate needs, so it is derived once from the built program —
-	// with the generic instantiations resolved first, because reflect.TypeFor's
-	// resolved type arguments are closure seeds — and shared.
-	inst := newInstantiations(pkgs, v)
-	ev := newEvidence(prog, inst, v)
+	// credit gate needs, so it is derived once from the built program — seeded
+	// from reflect.TypeFor's resolved type arguments and from what the sealed
+	// surface holds as well as from conversions — and shared.
+	ev := newEvidence(prog, inst, sealed, v)
 	methodRefs := newMethodReferenceScan(pkgs, facts, ev, v)
 	flows := newInterfaceFlows(prog, inst, methodRefs, v)
-	binds := newInterfaceBindScan(prog, pkgs, surface, methodRefs, analyzedPackages(pkgs), ev, inst, flows, v)
+	binds := newInterfaceBindScan(prog, pkgs, sealed, methodRefs, analyzedPackages(pkgs), ev, inst, flows, v)
 	if err := canceled(ctx, "scanning interface binds"); err != nil {
 		return nil, err
 	}
@@ -345,7 +364,7 @@ func evaluate(
 	}
 
 	funcs, unmeasured, reach, err := unreachableFuncs(
-		ctx, prog, ssaPkgs, pkgs, surface, deadTypes, facts, tests, v, participation,
+		ctx, prog, ssaPkgs, pkgs, surface, sealed, deadTypes, facts, tests, v, participation,
 	)
 	if err != nil {
 		return nil, err

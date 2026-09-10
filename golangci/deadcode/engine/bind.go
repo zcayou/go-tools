@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"maps"
 	"slices"
 
 	"golang.org/x/tools/go/packages"
@@ -33,7 +34,7 @@ type interfaceBindScan struct {
 func newInterfaceBindScan(
 	prog *ssa.Program,
 	loaded []*packages.Package,
-	surface *apiSurface,
+	sealed *sealedSurface,
 	refs *methodReferenceScan,
 	analyzed map[string]bool,
 	ev *evidence,
@@ -50,7 +51,7 @@ func newInterfaceBindScan(
 		scan.creditAssertion(prog.Fset, refs, flows, analyzed, ev, inst, asserted)
 	}
 	scan.creditInstantiations(prog.Fset, refs, flows, analyzed, inst)
-	scan.creditSealedSurface(refs, sealedSurfaceInterfaces(surface, inst, loaded))
+	scan.creditSealedSurface(sealed)
 
 	return scan
 }
@@ -357,16 +358,97 @@ func isReflectTypeAssert(fn *types.Func) bool {
 // in-module selects and nothing exposes is still reported — as the unused
 // exported type it is, which is the verdict naming the contract rather than
 // the implementations satisfying it.
-func (s *interfaceBindScan) creditSealedSurface(refs *methodReferenceScan, sealed []*types.Interface) {
-	for _, iface := range sealed {
+func (s *interfaceBindScan) creditSealedSurface(sealed *sealedSurface) {
+	maps.Copy(s.credited, sealed.implementations)
+}
+
+// sealedSurface is what the declared API surface's sealed interfaces stand
+// in for: the declared methods implementing one, which the surface credits,
+// and the receiver types declaring them, which a consumer holds behind it.
+//
+// The conversion it stands in for sits in a consumer, where no view can see
+// or mask it. Under instantiated rooting a generic interface is weighed
+// against every instantiation the program writes, test files included, in both
+// views — the reading instantiated rooting takes of the surface's own generics,
+// and for the same reason: which type argument a consumer picks says nothing
+// about who holds the interface. Weighed against the masked view's
+// instantiations instead, a library whose only instantiation is its own test
+// would report every implementation of its generic contracts in the test-only
+// family. Under skip nothing a test instantiates stands in for a consumer,
+// and the masked view weighs its own instead.
+type sealedSurface struct {
+	// implementations holds the credited declarations, keyed as participation
+	// keys them.
+	implementations map[string]bool
+	// held holds each implementing receiver type, a generic one as its origin:
+	// which instantiation a consumer holds is its own choice, and a method
+	// of a generic type is judged by its origin. An implementation declared
+	// in a test file is credited and never held — no consumer can obtain one,
+	// and in the masked view it would be test evidence.
+	held map[types.Type]bool
+}
+
+// holds reports whether fn is a method on a type the surface holds, which
+// a consumer puts behind a sealed interface where RTA never sees it.
+func (s *sealedSurface) holds(fn *ssa.Function) bool {
+	recv := fn.Signature.Recv()
+	return recv != nil && s.held[heldForm(recv.Type())]
+}
+
+// newSealedSurface resolves the sealed interfaces the surface exposes, generic
+// ones under inst, against every method the loaded packages declare.
+// The candidate pool is the one the reference scan keeps, test files included,
+// and for the reason it gives: an entry no verdict names is harmless.
+func newSealedSurface(surface *apiSurface, inst *instantiations, loaded []*packages.Package) *sealedSurface {
+	sealed := &sealedSurface{implementations: map[string]bool{}, held: map[types.Type]bool{}}
+	byName := map[string][]*types.Interface{}
+	for _, iface := range sealedSurfaceInterfaces(surface, inst, loaded) {
 		for method := range iface.Methods() {
-			for _, implementation := range refs.concreteMethodsByName[method.Name()] {
-				if implementsInterface(implementation.fn, iface) {
-					s.credited[implementation.key] = true
+			byName[method.Name()] = append(byName[method.Name()], iface)
+		}
+	}
+	if len(byName) == 0 {
+		return sealed
+	}
+	for _, pkg := range loaded {
+		if synthesizedPackage(pkg.PkgPath) {
+			continue
+		}
+		for _, file := range pkg.Syntax {
+			for _, decl := range file.Decls {
+				funcDecl, ok := decl.(*ast.FuncDecl)
+				if !ok || funcDecl.Recv == nil {
+					continue
+				}
+				method, ok := pkg.TypesInfo.Defs[funcDecl.Name].(*types.Func)
+				if !ok || !slices.ContainsFunc(byName[method.Name()], func(iface *types.Interface) bool {
+					return implementsInterface(method, iface)
+				}) {
+					continue
+				}
+				pos := position(pkg.Fset, method.Pos())
+				sealed.implementations[declKey(pos)] = true
+				if !testFile(pos.Filename) {
+					sealed.held[heldForm(method.Signature().Recv().Type())] = true
 				}
 			}
 		}
 	}
+	return sealed
+}
+
+// heldForm returns the type a consumer holds to invoke a method with the given
+// receiver: its base, through a pointer, and the generic origin for a method
+// of a generic type — the form materialized resolves such a receiver to.
+func heldForm(recv types.Type) types.Type {
+	typ := types.Unalias(recv)
+	if pointer, ok := typ.(*types.Pointer); ok {
+		typ = types.Unalias(pointer.Elem())
+	}
+	if named, ok := typ.(*types.Named); ok {
+		return named.Origin()
+	}
+	return typ
 }
 
 // sealedSurfaceInterfaces returns the interfaces the declared API surface
@@ -377,10 +459,10 @@ func (s *interfaceBindScan) creditSealedSurface(refs *methodReferenceScan, seale
 // a library, not a way to shield one, so standing in for consumers takes
 // saying they exist.
 //
-// A generic interface contributes the instantiations the program builds
-// of it rather than its parameterized form, which is a shape no concrete method
-// set matches. One the program never instantiates contributes nothing, the way
-// every other resolved-vector credit degrades.
+// A generic interface contributes the instantiations inst holds of it rather
+// than its parameterized form, which is a shape no concrete method set matches.
+// One with none contributes nothing, the way every other resolved-vector credit
+// degrades.
 func sealedSurfaceInterfaces(surface *apiSurface, inst *instantiations, loaded []*packages.Package) []*types.Interface {
 	var sealed []*types.Interface
 	for _, pkg := range loaded {

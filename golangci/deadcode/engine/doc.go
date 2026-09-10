@@ -150,7 +150,19 @@
 // than to shield one. A generic sealed interface contributes the instantiations
 // the program builds of it, since a parameterized interface is a shape no
 // concrete method set matches, and one the program never instantiates
-// contributes nothing.
+// contributes nothing. Under [GenericRootingInstantiated] the instantiations
+// are the whole program's, test files included, in both views: which type
+// argument a consumer picks says nothing about who holds the interface,
+// the reading instantiated rooting takes of the surface's own generics. Under
+// [GenericRootingSkip] no test's instantiation stands in for a consumer's,
+// so the masked view weighs the contract against its own.
+//
+// What the credit stands in for is materialization as well. A consumer holding
+// a sealed interface holds an implementation behind it, so each implementation
+// seeds the evidence closure the way a conversion operand would,
+// and an assertion from the sealed interface to another — the within-package
+// capability a seal makes possible — finds it there. An implementation declared
+// in a test file is credited and never held: no consumer can obtain one.
 //
 // Structural satisfaction alone credits nothing: a dependency's interface
 // that merely declares a method of the same name is not a use. Because
@@ -199,6 +211,21 @@
 // RTA cannot see behind — the invoking call sits in a dependency body SSA never
 // built, or behind a descriptor reflect.TypeFor conjured — so reporting
 // it unreachable would assert what the participation verdicts just refused to.
+//
+// A credited method on a type the sealed surface holds is a root as well.
+// A consumer puts that type behind the interface in code this analysis does not
+// load, so RTA never learns it as a runtime type and reaches none of its
+// methods; left unrooted, what such a method calls would be reported on exactly
+// the claim its own verdict was spared. A method credited on evidence
+// the program carries takes no root: where that evidence runs, RTA sees
+// the conversion and reaches the method through the runtime type it makes,
+// and where nothing runs it, the credit spares the method's verdict and no
+// more. A credited method of a generic type roots through the concrete
+// instantiations the program builds of it, and one with none is walked the way
+// an uninstantiated generic on the declared surface is: its concrete callees
+// rooted, and [VerdictUnmeasuredGeneric] drawn where the walk meets a call
+// it cannot follow, unexported as the method may be. Under the masked view
+// a credited method declared in a test file roots nothing.
 //
 // Interface-method liveness propagates across interface-to-interface flows.
 // When interface A flows into interface B — a conversion, which identical
@@ -266,6 +293,16 @@
 // test code is the only thing keeping it alive. Declarations in test
 // and generated files are judged in the full view alone, and the API surface
 // exempts in both views before the diff.
+//
+// Two readings of the program stand in for consumers rather than weigh
+// evidence, and the mask leaves them alone: the sealed surface, whose
+// conversions sit in consumers no view can see, and — under instantiated
+// rooting — the instantiations a test writes, which stand in for a consumer's
+// type argument both where they root the declared surface's generics and where
+// they give its sealed generic contracts a shape. A library's own tests
+// are usually the only code in view instantiating its generics, and refusing
+// them would leave the surface unmeasured in exactly the view the question
+// is asked in; [GenericRootingSkip] is how a run declines that.
 //
 // Some test code cannot be spelled as test code: a test plugin looks, feels,
 // and compiles exactly like a production plugin, and only who consumes it makes

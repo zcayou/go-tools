@@ -42,6 +42,14 @@ import (
 // carried — reflect.Zero on it produces the value the operand sweep never saw.
 // reflect.TypeOf needs no rule of its own: its argument is converted to any
 // at the call, which is a MakeInterface the sweep already sees.
+//
+// It seeds, too, from what the declared surface's sealed interfaces hold.
+// A consumer holding one holds an implementation behind it — the premise
+// the sealed credit rests on — and the conversion that put it there is in code
+// this analysis does not load, where no operand sweep reaches. Without the seed
+// an implementation the seal credits would still read as never materialized,
+// and an assertion from the sealed interface to another one, the within-package
+// capability a seal makes possible, would find nothing behind it.
 type evidence struct {
 	// byOperand records the distinct conversions to an interface the built program
 	// performs, keyed by operand.
@@ -49,14 +57,15 @@ type evidence struct {
 	// granted records every type the closure visited; the value says whether some
 	// non-skip position reached it, which is what grants evidence.
 	granted typeutil.Map
-	// seeds records the types the closure started from — conversion operands
-	// and resolved reflect.TypeFor arguments — as opposed to the types it derived
-	// from them. An unexported method is credited against these alone.
+	// seeds records the types the closure started from — conversion operands,
+	// resolved reflect.TypeFor arguments, and what the sealed surface holds —
+	// as opposed to the types it derived from them. An unexported method
+	// is credited against these alone.
 	seeds typeutil.Map
 	msets *typeutil.MethodSetCache
 }
 
-func newEvidence(prog *ssa.Program, inst *instantiations, v view) *evidence {
+func newEvidence(prog *ssa.Program, inst *instantiations, sealed *sealedSurface, v view) *evidence {
 	ev := &evidence{msets: &prog.MethodSets}
 	for fn := range ssautil.AllFunctions(prog) {
 		for _, block := range fn.Blocks {
@@ -71,6 +80,9 @@ func newEvidence(prog *ssa.Program, inst *instantiations, v view) *evidence {
 		}
 	}
 	for _, typ := range reflectTypeForArguments(prog, inst) {
+		ev.seed(typ)
+	}
+	for typ := range sealed.held {
 		ev.seed(typ)
 	}
 	return ev
