@@ -513,6 +513,42 @@ var _ = Describe("Analyze", func() {
 			}))
 		})
 
+		Describe("a re-export", func() {
+			// facade renames owner's vocabulary and outer renames one of facade's copies
+			// in turn. The program and its test spell only the copies.
+			It("judges a copy as the declaration it renames", func(ctx SpecContext) {
+				Expect(analyzeWith(ctx, "reexport", engine.Config{
+					Tests: true,
+					API:   []string{"./owner", "./facade", "./outer"},
+				})).To(Equal([]string{
+					// A copy of what the surface does not declare is the surface's own name
+					// for it, and a conversion is a constant of its own.
+					"facade/facade.go:22:6: unused exported type: Worker",
+					"facade/facade.go:25:7: unused exported const: Capacity",
+					// Idle's copies define a second name without using the first. Former
+					// renames within one package, which is a declaration of its own.
+					"owner/owner.go:13:2: unused exported const: Idle",
+					"owner/owner.go:27:6: unused exported type: Former",
+					// A test spelling a copy spells the original, generic or not.
+					"owner/owner.go:11:2: test-only unused exported const: Off",
+					"owner/owner.go:17:6: test-only unused exported type: Box",
+				}))
+			})
+
+			It("judges every copy by its own references while no surface is declared", func(ctx SpecContext) {
+				// Each copy's definition then counts as a use of its original, so what
+				// the surface run reports on owner is reported on the copy instead.
+				Expect(analyzeWith(ctx, "reexport", engine.Config{Tests: true})).To(Equal([]string{
+					"facade/facade.go:17:2: unused exported const: Idle",
+					"facade/facade.go:22:6: unused exported type: Worker",
+					"facade/facade.go:25:7: unused exported const: Capacity",
+					"owner/owner.go:27:6: unused exported type: Former",
+					"facade/facade.go:11:2: test-only unused exported type: Box",
+					"facade/facade.go:16:2: test-only unused exported const: Off",
+				}))
+			})
+		})
+
 		Describe("a generic surface", func() {
 			// The fixture is a library whose only way in is generic, so the exported
 			// non-generic Describe is all the masked view can root without help.

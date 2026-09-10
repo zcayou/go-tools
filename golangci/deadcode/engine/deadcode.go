@@ -341,7 +341,7 @@ func evaluate(
 ) ([]declaration, error) {
 	// The reference scans run first: whether a type is referenced decides both
 	// which API methods stay exempt and which of them are worth rooting.
-	idents := unusedExportedIdents(pkgs, facts, v)
+	idents := unusedExportedIdents(pkgs, facts, surface, v)
 	deadTypes := unreferencedTypes(idents, surface)
 
 	// Whether the program can hold a type behind an interface is evidence every

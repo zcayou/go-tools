@@ -107,6 +107,23 @@
 // counts wherever it appears, because that body runs: Ginkgo's var _ =
 // Describe("...", func() { ... }) uses everything it names.
 //
+// A re-export on the declared surface is judged as the declaration it renames.
+// An exported alias of another surface package's type, instantiated or not,
+// and an exported constant whose value is another surface package's constant
+// of the same type add a name rather than a declaration, and the name
+// is for consumers: a module reaches its own vocabulary through the package
+// that owns it, so judged by its own references every such copy reads
+// as unused, and the ones that pass do so because some caller happened to spell
+// them. The copy therefore draws no verdict. A reference to it counts
+// for the declaration at the end of its chain of copies, admitted by the view
+// like any other reference, and its right-hand side is part
+// of that declaration's own extent: defining a second name is not a use
+// of the first, and counting it as one would let a dead declaration hide behind
+// any copy of it. A conversion is a constant of its own and a second name
+// within one package a declaration of its own, and so is a copy of anything
+// the surface does not declare — a package it leaves out, or a dependency —
+// because the copy is then how that declaration reaches consumers at all.
+//
 // # Interface participation
 //
 // A method counts as used when the program binds its receiver to an interface

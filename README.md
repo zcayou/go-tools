@@ -139,6 +139,19 @@ linters:
         text: '^test-only '
 ```
 
+A re-export on the declared surface is judged as the declaration it renames.
+An exported `type X = p.Y` (instantiated or not) or `const X = p.Y` of the same
+type in an `api` package, naming a declaration another `api` package makes,
+draws no verdict of its own: every reference to it counts for `p.Y`, following
+a chain of copies to its end, and its own right-hand side does not. So a facade
+renaming the module's vocabulary is not reported name by name because the
+module's own code spells the owner, and a dead `p.Y` cannot hide behind a copy
+of it — it is reported where it is declared, in its `test-only` form when only
+a test spells any of its names. A conversion, a second name within one package,
+and a copy of something the surface does not declare — a package it leaves out,
+a dependency — are declarations of their own, since the copy is then how that
+declaration reaches consumers.
+
 A sealed interface — one declaring an unexported method, so that no other
 package can implement it — is weighed against the declared surface. Nothing in
 the module converts a handle to it when the factory hands back the concrete
