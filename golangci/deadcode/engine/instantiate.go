@@ -20,23 +20,29 @@ import (
 // wrongly.
 const maxResolvedVectors = 1024
 
-// instantiations resolves every generic function and generic type name
-// in the loaded program to the fully concrete type-argument vectors the program
-// instantiates it with. TypesInfo.Instances records vectors as written,
-// and inside a generic body they mention the enclosing declaration's type
-// parameters — evidence that is real but not yet usable, because no concrete
-// method set matches a free parameter. Such a vector is re-emitted under every
-// concrete vector of its enclosing generic, transitively to a fixpoint, so
-// an instantiation several generics deep still resolves to the arguments
-// the program runs it with.
+// instantiations resolves every generic function, generic method and generic
+// type name in the loaded program to the fully concrete type-argument vectors
+// the program instantiates it with. TypesInfo.Instances records vectors
+// as written, and inside a generic body they mention the enclosing
+// declaration's type parameters — evidence that is real but not yet usable,
+// because no concrete method set matches a free parameter. Such a vector
+// is re-emitted under every concrete vector of its enclosing generic,
+// transitively to a fixpoint, so an instantiation several generics deep still
+// resolves to the arguments the program runs it with.
+//
+// A generic method's vector is its receiver's type arguments followed by its
+// own, the order [ssa.Function.TypeArgs] uses. Instances records only the own
+// half at a call site; the receiver's half is read off the method the site
+// uses, whose receiver is the type declaring the method even where the call
+// selects it through an embedded field.
 type instantiations struct {
 	resolved map[types.Object][][]types.Type
 }
 
-// enclosingGeneric is the innermost generic declaration around an instantiation
-// site: the object whose concrete vectors stand in for the site's free type
+// enclosingGeneric is a generic declaration around an instantiation site:
+// the object whose concrete vectors stand in for the site's free type
 // parameters, and the parameter objects a parametric vector references,
-// in declaration order. Inside a method of a generic type the two halves
+// in vector order. Inside a method of a generic type the two halves
 // deliberately differ — vectors are recorded against the named type, while
 // a parametric vector references the method's own receiver type parameters,
 // which are distinct objects from the type's; an environment keyed
@@ -44,6 +50,33 @@ type instantiations struct {
 type enclosingGeneric struct {
 	obj    types.Object
 	params []*types.TypeParam
+}
+
+// genericContext is the generic declarations a top-level declaration places
+// its sites inside, outermost first. A generic function or generic type opens
+// one, and so does a method of a generic type — its receiver's. A generic
+// method opens its receiver's, when its type is generic, and then its own,
+// whose parameters are the receiver's followed by the method's.
+//
+// Which of them a site resolves under is decided by what the site mentions,
+// not by where it is written. A site mentioning only receiver parameters
+// resolves under the type's vectors, as it would in a plain method, because
+// the type can be instantiated while the method never is; one mentioning any
+// of the method's own parameters needs the method's vectors, which alone pair
+// the two halves as the program ran them.
+type genericContext []*enclosingGeneric
+
+// enclosing returns the outermost declaration in the context whose parameters
+// cover every type parameter the written types mention, or nil when none does,
+// which leaves the site unresolved rather than guessed at.
+func (c genericContext) enclosing(written ...types.Type) *enclosingGeneric {
+	for _, generic := range c {
+		uncovered := func(param *types.TypeParam) bool { return !slices.Contains(generic.params, param) }
+		if !slices.ContainsFunc(written, func(t types.Type) bool { return mentionsTypeParam(t, uncovered) }) {
+			return generic
+		}
+	}
+	return nil
 }
 
 // rawInstance is one instantiation site as recorded: the generic object,
@@ -77,9 +110,9 @@ func newInstantiations(loaded []*packages.Package, v view) *instantiations {
 }
 
 // vectors yields every fully concrete type-argument vector recorded
-// for a generic function or generic type name, deduplicated and in a stable
-// order. A generic object never instantiated with concrete arguments yields
-// nothing.
+// for a generic function, generic method or generic type name, deduplicated
+// and in a stable order. A generic object never instantiated with concrete
+// arguments yields nothing.
 func (s *instantiations) vectors(obj types.Object) [][]types.Type {
 	if canonical := canonicalGeneric(obj); canonical != nil {
 		obj = canonical
@@ -98,30 +131,31 @@ func (s *instantiations) all(yield func(obj types.Object, vectors [][]types.Type
 }
 
 // fileInstances collects the file's instantiation sites, each with its
-// enclosing generic. The enclosing declaration is decided at the top level
-// because that is the only level Go permits one: a local type cannot be generic
-// and a function literal has no type parameters of its own, so a site's free
-// parameters always belong to the declaration that holds it.
+// enclosing generic. The context is gathered at the top level because
+// that is the only level Go permits a generic declaration: a local type cannot
+// be generic and a function literal has no type parameters of its own, so
+// a site's free parameters always belong to the declaration that holds it,
+// and genericContext picks which of that declaration's generics they are.
 func fileInstances(pkg *packages.Package, file *ast.File) []rawInstance {
 	var raw []rawInstance
 	for _, decl := range file.Decls {
 		switch decl := decl.(type) {
 		case *ast.FuncDecl:
-			raw = append(raw, nodeInstances(pkg, decl, funcEnclosing(pkg, decl))...)
+			raw = append(raw, nodeInstances(pkg, decl, funcContext(pkg, decl))...)
 		case *ast.GenDecl:
 			for _, spec := range decl.Specs {
-				var enclosing *enclosingGeneric
+				var context genericContext
 				if typeSpec, ok := spec.(*ast.TypeSpec); ok {
-					enclosing = typeSpecEnclosing(pkg, typeSpec)
+					context = typeSpecContext(pkg, typeSpec)
 				}
-				raw = append(raw, nodeInstances(pkg, spec, enclosing)...)
+				raw = append(raw, nodeInstances(pkg, spec, context)...)
 			}
 		}
 	}
 	return raw
 }
 
-func nodeInstances(pkg *packages.Package, node ast.Node, enclosing *enclosingGeneric) []rawInstance {
+func nodeInstances(pkg *packages.Package, node ast.Node, context genericContext) []rawInstance {
 	var raw []rawInstance
 	ast.Inspect(node, func(n ast.Node) bool {
 		ident, ok := n.(*ast.Ident)
@@ -132,43 +166,58 @@ func nodeInstances(pkg *packages.Package, node ast.Node, enclosing *enclosingGen
 		if !ok || instance.TypeArgs.Len() == 0 {
 			return true
 		}
-		obj := canonicalGeneric(pkg.TypesInfo.Uses[ident])
+		used := pkg.TypesInfo.Uses[ident]
+		obj := canonicalGeneric(used)
 		if obj == nil {
 			return true
 		}
-		raw = append(raw, rawInstance{obj: obj, args: slices.Collect(instance.TypeArgs.Types()), enclosing: enclosing})
+		site := rawInstance{obj: obj, args: slices.Concat(receiverTypeArgs(used), slices.Collect(instance.TypeArgs.Types()))}
+		if slices.ContainsFunc(site.args, parametricType) {
+			site.enclosing = context.enclosing(site.args...)
+		}
+		raw = append(raw, site)
 		return true
 	})
 	return raw
 }
 
-// funcEnclosing returns the generic context a function declaration opens:
-// the function's own type parameters when it is generic, the receiver's when
-// it is a method of a generic type, nil for everything else.
-func funcEnclosing(pkg *packages.Package, decl *ast.FuncDecl) *enclosingGeneric {
+// receiverTypeArgs returns the type arguments of the receiver a used method
+// is declared on, and nothing for a free function or a type name.
+func receiverTypeArgs(used types.Object) []types.Type {
+	fn, ok := used.(*types.Func)
+	if !ok || fn.Signature().Recv() == nil {
+		return nil
+	}
+	named := namedForm(fn.Signature().Recv().Type())
+	if named == nil {
+		return nil
+	}
+	return slices.Collect(named.TypeArgs().Types())
+}
+
+// funcContext returns the generic context a function declaration opens:
+// the receiver's type parameters when it is a method of a generic type, then
+// its own when it is generic, and nothing for everything else.
+func funcContext(pkg *packages.Package, decl *ast.FuncDecl) genericContext {
 	fn, ok := pkg.TypesInfo.Defs[decl.Name].(*types.Func)
 	if !ok {
 		return nil
 	}
+	var context genericContext
 	sig := fn.Signature()
+	if sig.RecvTypeParams().Len() > 0 {
+		if named := namedForm(sig.Recv().Type()); named != nil {
+			receiver := &enclosingGeneric{obj: named.Origin().Obj(), params: slices.Collect(sig.RecvTypeParams().TypeParams())}
+			context = append(context, receiver)
+		}
+	}
 	if sig.TypeParams().Len() > 0 {
-		return &enclosingGeneric{obj: fn, params: slices.Collect(sig.TypeParams().TypeParams())}
+		context = append(context, &enclosingGeneric{obj: fn, params: typeParams(fn)})
 	}
-	if sig.RecvTypeParams().Len() == 0 {
-		return nil
-	}
-	recv := types.Unalias(sig.Recv().Type())
-	if pointer, isPointer := recv.(*types.Pointer); isPointer {
-		recv = types.Unalias(pointer.Elem())
-	}
-	named, ok := recv.(*types.Named)
-	if !ok {
-		return nil
-	}
-	return &enclosingGeneric{obj: named.Origin().Obj(), params: slices.Collect(sig.RecvTypeParams().TypeParams())}
+	return context
 }
 
-func typeSpecEnclosing(pkg *packages.Package, spec *ast.TypeSpec) *enclosingGeneric {
+func typeSpecContext(pkg *packages.Package, spec *ast.TypeSpec) genericContext {
 	name, ok := pkg.TypesInfo.Defs[spec.Name].(*types.TypeName)
 	if !ok {
 		return nil
@@ -177,13 +226,25 @@ func typeSpecEnclosing(pkg *packages.Package, spec *ast.TypeSpec) *enclosingGene
 	if !ok || named.TypeParams().Len() == 0 {
 		return nil
 	}
-	return &enclosingGeneric{obj: name, params: slices.Collect(named.TypeParams().TypeParams())}
+	return genericContext{{obj: name, params: typeParams(name)}}
 }
 
-// canonicalGeneric maps a reference to a generic function or generic type name
-// onto the origin object instantiations are indexed by, and anything else
-// to nil. Instances hands back origin objects already; normalizing here as well
-// lets a caller ask about whichever form it holds.
+// namedForm unwraps to the named type behind t, through one pointer.
+func namedForm(t types.Type) *types.Named {
+	switch t := types.Unalias(t).(type) {
+	case *types.Named:
+		return t
+	case *types.Pointer:
+		named, _ := types.Unalias(t.Elem()).(*types.Named)
+		return named
+	}
+	return nil
+}
+
+// canonicalGeneric maps a reference to a generic function, generic method
+// or generic type name onto the origin object instantiations are indexed by,
+// and anything else to nil. Instances hands back origin objects already;
+// normalizing here as well lets a caller ask about whichever form it holds.
 func canonicalGeneric(obj types.Object) types.Object {
 	switch obj := obj.(type) {
 	case *types.Func:
@@ -445,93 +506,99 @@ func substituteInterface(iface *types.Interface, env map[*types.TypeParam]types.
 	return substituted, true
 }
 
-// parametricType reports whether t mentions a type parameter anywhere. A named
-// type is judged by its type arguments alone: Go rejects a local type
+// parametricType reports whether t mentions a type parameter anywhere.
+func parametricType(t types.Type) bool {
+	return mentionsTypeParam(t, func(*types.TypeParam) bool { return true })
+}
+
+// mentionsTypeParam reports whether t mentions a type parameter match accepts.
+// A named type is judged by its type arguments alone: Go rejects a local type
 // declaration that uses an enclosing type parameter, so arguments are the only
 // way a named type can carry one, and not expanding underlying structure
 // is also what keeps the walk finite on recursive types. Signatures are walked
 // without their receiver for the same reason — an interface method's receiver
 // is the interface itself.
-func parametricType(t types.Type) bool {
+func mentionsTypeParam(t types.Type, match func(*types.TypeParam) bool) bool {
 	switch t := types.Unalias(t).(type) {
 	case *types.TypeParam:
-		return true
+		return match(t)
 	case *types.Named:
-		return parametricNamed(t)
+		return namedMentions(t, match)
 	case *types.Pointer:
-		return parametricType(t.Elem())
+		return mentionsTypeParam(t.Elem(), match)
 	case *types.Slice:
-		return parametricType(t.Elem())
+		return mentionsTypeParam(t.Elem(), match)
 	case *types.Array:
-		return parametricType(t.Elem())
+		return mentionsTypeParam(t.Elem(), match)
 	case *types.Chan:
-		return parametricType(t.Elem())
+		return mentionsTypeParam(t.Elem(), match)
 	case *types.Map:
-		return parametricType(t.Key()) || parametricType(t.Elem())
+		return mentionsTypeParam(t.Key(), match) || mentionsTypeParam(t.Elem(), match)
 	case *types.Signature:
-		return parametricTuple(t.Params()) || parametricTuple(t.Results())
+		return tupleMentions(t.Params(), match) || tupleMentions(t.Results(), match)
 	case *types.Tuple:
-		return parametricTuple(t)
+		return tupleMentions(t, match)
 	case *types.Struct:
-		return parametricStruct(t)
+		return structMentions(t, match)
 	case *types.Interface:
-		return parametricInterface(t)
+		return interfaceMentions(t, match)
 	case *types.Union:
-		return parametricUnion(t)
+		return unionMentions(t, match)
 	}
 	return false
 }
 
-// parametricNamed treats a generic name carrying no type arguments
-// as parametric, so a shape substitution has no arguments to rebuild lands
-// in substitute's failure path rather than passing through unchanged.
-func parametricNamed(named *types.Named) bool {
+// namedMentions treats a generic name carrying no type arguments as mentioning
+// a type parameter whatever match accepts, so a shape substitution has no
+// arguments to rebuild lands in substitute's failure path rather than passing
+// through unchanged, and no enclosing generic claims it.
+func namedMentions(named *types.Named, match func(*types.TypeParam) bool) bool {
 	if named.TypeParams().Len() > 0 && named.TypeArgs().Len() == 0 {
 		return true
 	}
 	for arg := range named.TypeArgs().Types() {
-		if parametricType(arg) {
+		if mentionsTypeParam(arg, match) {
 			return true
 		}
 	}
 	return false
 }
 
-func parametricTuple(tuple *types.Tuple) bool {
+func tupleMentions(tuple *types.Tuple, match func(*types.TypeParam) bool) bool {
 	for field := range tuple.Variables() {
-		if parametricType(field.Type()) {
+		if mentionsTypeParam(field.Type(), match) {
 			return true
 		}
 	}
 	return false
 }
 
-func parametricStruct(strct *types.Struct) bool {
+func structMentions(strct *types.Struct, match func(*types.TypeParam) bool) bool {
 	for field := range strct.Fields() {
-		if parametricType(field.Type()) {
+		if mentionsTypeParam(field.Type(), match) {
 			return true
 		}
 	}
 	return false
 }
 
-func parametricInterface(iface *types.Interface) bool {
+func interfaceMentions(iface *types.Interface, match func(*types.TypeParam) bool) bool {
 	for method := range iface.ExplicitMethods() {
-		if parametricType(method.Type()) {
+		if mentionsTypeParam(method.Type(), match) {
 			return true
 		}
 	}
 	for embedded := range iface.EmbeddedTypes() {
-		if parametricType(embedded) {
+		if mentionsTypeParam(embedded, match) {
 			return true
 		}
 	}
 	return false
 }
 
-func parametricUnion(union *types.Union) bool {
+func unionMentions(union *types.Union, match func(*types.TypeParam) bool) bool {
 	for term := range union.Terms() {
-		if parametricType(term.Type()) {
+		if mentionsTypeParam(term.Type(), match) {
 			return true
 		}
 	}

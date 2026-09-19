@@ -171,16 +171,16 @@ func (s *interfaceBindScan) creditInstantiations(
 ) {
 	for obj, vectors := range inst.all {
 		params := typeParams(obj)
-		if params == nil {
+		if len(params) == 0 {
 			continue
 		}
 		for _, vector := range vectors {
-			if len(vector) != params.Len() {
+			if len(vector) != len(params) {
 				continue
 			}
-			env := environment(slices.Collect(params.TypeParams()), vector)
+			env := environment(params, vector)
 			for i, argument := range vector {
-				s.creditConstraint(fset, refs, flows, analyzed, argument, params.At(i).Constraint(), env)
+				s.creditConstraint(fset, refs, flows, analyzed, argument, params[i].Constraint(), env)
 			}
 		}
 	}
@@ -226,12 +226,12 @@ func (s *interfaceBindScan) creditConstraint(
 }
 
 // assertedType is one interface type the loaded packages assert to,
-// with the generic context needed to make it concrete: enclosing
-// is the innermost generic declaration around the assertion when the written
-// type references its type parameters, nil otherwise. Deduplication keys
-// the written form together with that context, so the same spelling under two
-// different generics stays two records — each substitutes under its own
-// parameters.
+// with the generic context needed to make it concrete: enclosing is the generic
+// declaration whose parameters the written type references, chosen
+// as genericContext chooses one for an instantiation site, and nil when
+// the written type references none. Deduplication keys the written form
+// together with that context, so the same spelling under two different generics
+// stays two records — each substitutes under its own parameters.
 type assertedType struct {
 	typ       types.Type
 	enclosing *enclosingGeneric
@@ -257,14 +257,14 @@ func assertedInterfaces(loaded []*packages.Package, v view) []assertedType {
 			for _, decl := range file.Decls {
 				switch decl := decl.(type) {
 				case *ast.FuncDecl:
-					asserted = collectAsserted(pkg, decl, funcEnclosing(pkg, decl), seen, asserted)
+					asserted = collectAsserted(pkg, decl, funcContext(pkg, decl), seen, asserted)
 				case *ast.GenDecl:
 					for _, spec := range decl.Specs {
-						var enclosing *enclosingGeneric
+						var context genericContext
 						if typeSpec, ok := spec.(*ast.TypeSpec); ok {
-							enclosing = typeSpecEnclosing(pkg, typeSpec)
+							context = typeSpecContext(pkg, typeSpec)
 						}
-						asserted = collectAsserted(pkg, spec, enclosing, seen, asserted)
+						asserted = collectAsserted(pkg, spec, context, seen, asserted)
 					}
 				}
 			}
@@ -274,13 +274,13 @@ func assertedInterfaces(loaded []*packages.Package, v view) []assertedType {
 }
 
 // collectAsserted gathers the assertion targets under one top-level
-// declaration, attributing the enclosing generic only where the written type
+// declaration, attributing an enclosing generic only where the written type
 // actually references type parameters — a concrete assertion inside a generic
 // body needs no specialization and deduplicates globally.
 func collectAsserted(
 	pkg *packages.Package,
 	node ast.Node,
-	enclosing *enclosingGeneric,
+	context genericContext,
 	seen map[string]bool,
 	asserted []assertedType,
 ) []assertedType {
@@ -291,9 +291,11 @@ func collectAsserted(
 		}
 		record := assertedType{typ: typ}
 		key := typ.String()
-		if enclosing != nil && parametricType(typ) {
-			record.enclosing = enclosing
-			key += "|" + declKey(position(pkg.Fset, enclosing.obj.Pos()))
+		if parametricType(typ) {
+			if enclosing := context.enclosing(typ); enclosing != nil {
+				record.enclosing = enclosing
+				key += "|" + declKey(position(pkg.Fset, enclosing.obj.Pos()))
+			}
 		}
 		if seen[key] {
 			return
@@ -553,13 +555,18 @@ func confersUse(
 	return flows.used(key)
 }
 
-func typeParams(obj types.Object) *types.TypeParamList {
+// typeParams returns the type parameters a generic object's vectors bind,
+// in vector order. A generic method's are its receiver's followed by its own,
+// and the receiver's are the method's own objects — the ones its body
+// mentions — rather than its type's.
+func typeParams(obj types.Object) []*types.TypeParam {
 	switch obj := obj.(type) {
 	case *types.Func:
-		return obj.Signature().TypeParams()
+		sig := obj.Signature()
+		return slices.Concat(slices.Collect(sig.RecvTypeParams().TypeParams()), slices.Collect(sig.TypeParams().TypeParams()))
 	case *types.TypeName:
 		if named, ok := obj.Type().(*types.Named); ok {
-			return named.TypeParams()
+			return slices.Collect(named.TypeParams().TypeParams())
 		}
 	}
 	return nil

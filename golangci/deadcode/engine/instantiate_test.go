@@ -69,6 +69,71 @@ func run() {
 		Expect(vectorStrings(inst.Vectors(lookup[*types.Func](pkg, "bottom")))).To(Equal([]string{"bool", "int", "string"}))
 	})
 
+	It("records a generic method's vector as its receiver's arguments, then its own", func() {
+		// Outer selects Open through its embedded Pipe[bool], so the receiver half
+		// comes from the declaring type rather than from the selection.
+		pkg := typecheckPackages(`package methods
+
+type Pipe[E any] struct{}
+
+func (Pipe[E]) Open[F any](f F) {}
+
+type Outer struct{ Pipe[bool] }
+
+type Set struct{}
+
+func (Set) Rare[K comparable](k K) {}
+
+func run() {
+	Pipe[int]{}.Open("x")
+	Pipe[string].Open[float64](Pipe[string]{}, 1.5)
+	Outer{}.Open(int8(1))
+	Set{}.Rare(uint8(1))
+}
+`)[0]
+
+		inst := engine.NewInstantiations([]*packages.Package{pkg})
+
+		Expect(vectorStrings(inst.Vectors(namedMethod(pkg, "Pipe", "Open")))).To(Equal([]string{
+			"bool, int8", "int, string", "string, float64",
+		}))
+		Expect(vectorStrings(inst.Vectors(namedMethod(pkg, "Set", "Rare")))).To(Equal([]string{"uint8"}))
+	})
+
+	It("resolves a site inside a generic method under the declaration whose parameters it mentions", func() {
+		// Open is instantiated once, with a string receiver; Pipe is instantiated
+		// with int as well. A site mentioning only the receiver's parameter resolves
+		// under both of Pipe's vectors, and a site mentioning Open's own parameter
+		// only under Open's, which alone pairs the two halves.
+		pkg := typecheckPackages(`package layers
+
+func receiverOnly[T any]() {}
+
+func methodOnly[T any]() {}
+
+func both[T, U any]() {}
+
+type Pipe[E any] struct{}
+
+func (Pipe[E]) Open[F any]() {
+	receiverOnly[E]()
+	methodOnly[F]()
+	both[E, F]()
+}
+
+func run() {
+	_ = Pipe[int]{}
+	Pipe[string]{}.Open[bool]()
+}
+`)[0]
+
+		inst := engine.NewInstantiations([]*packages.Package{pkg})
+
+		Expect(vectorStrings(inst.Vectors(lookup[*types.Func](pkg, "receiverOnly")))).To(Equal([]string{"int", "string"}))
+		Expect(vectorStrings(inst.Vectors(lookup[*types.Func](pkg, "methodOnly")))).To(Equal([]string{"bool"}))
+		Expect(vectorStrings(inst.Vectors(lookup[*types.Func](pkg, "both")))).To(Equal([]string{"string, bool"}))
+	})
+
 	It("reads instantiations from dependencies the analyzed packages import", func() {
 		pkgs := typecheckPackages(`package dep
 

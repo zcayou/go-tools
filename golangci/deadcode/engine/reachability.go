@@ -177,7 +177,8 @@ func creditedMethods(
 
 // declaredMethods returns the functions of the methods declared on named, found
 // through their declarations: x/tools builds no method value
-// for a parameterized receiver, so a generic type's method set yields none.
+// for a parameterized receiver or a generic method, so a method set yields
+// neither.
 func declaredMethods(prog *ssa.Program, named *types.Named) []*ssa.Function {
 	var methods []*ssa.Function
 	for method := range named.Methods() {
@@ -335,12 +336,12 @@ func unreachableDecls(
 // initializer, its exported package-level functions, and the exported methods
 // of its exported named types. Internal and test packages contribute nothing —
 // no library consumer can reach them, so rooting there would make their code
-// trivially alive. Generic functions and generic named types are skipped:
-// an uninstantiated body has no concrete instance to root at, and RTA panics
-// when asked to register a type parameter as a runtime type. Code a generic API
-// alone reaches is therefore reported as unreachable — the cost of measuring
-// liveness against a generic public API, and what [GenericRootingInstantiated]
-// answers by rooting instantiations instead.
+// trivially alive. Generic functions, generic named types and generic methods
+// are skipped: an uninstantiated body has no concrete instance to root at,
+// and RTA panics when asked to register a type parameter as a runtime type.
+// Code a generic API alone reaches is therefore reported as unreachable —
+// the cost of measuring liveness against a generic public API, and what
+// [GenericRootingInstantiated] answers by rooting instantiations instead.
 func exportedRoots(prog *ssa.Program, pkg *ssa.Package, deadTypes map[string]bool) []*ssa.Function {
 	if pkg == nil || !exportedRootPackage(pkg.Pkg.Path()) {
 		return nil
@@ -626,7 +627,7 @@ func unmeasuredDeclaration(prog *ssa.Program, generic *ssa.Function) declaration
 
 // surfaceGenerics returns the declarations exportedRoots had to skip across
 // the declared surface: each surface package's exported generic functions,
-// and the exported methods of its exported generic named types.
+// and the exported generic methods of its exported named types.
 func surfaceGenerics(
 	prog *ssa.Program,
 	ssaPkgs []*ssa.Package,
@@ -644,7 +645,9 @@ func surfaceGenerics(
 }
 
 // exportedGenerics returns one package's exported generic functions,
-// and the exported methods of its exported generic named types.
+// and the exported generic methods of its exported named types: every method
+// of a generic type, and a method declaring type parameters of its own
+// on any type.
 func exportedGenerics(prog *ssa.Program, pkg *ssa.Package, deadTypes map[string]bool) []*ssa.Function {
 	var found []*ssa.Function
 	for name, member := range pkg.Members {
@@ -658,14 +661,11 @@ func exportedGenerics(prog *ssa.Program, pkg *ssa.Package, deadTypes map[string]
 			}
 		case *ssa.Type:
 			named, ok := member.Type().(*types.Named)
-			if !ok || named.TypeParams().Len() == 0 {
-				continue
-			}
-			if deadTypes[declKey(position(prog.Fset, member.Object().Pos()))] {
+			if !ok || deadTypes[declKey(position(prog.Fset, member.Object().Pos()))] {
 				continue
 			}
 			for _, method := range declaredMethods(prog, named) {
-				if token.IsExported(method.Name()) {
+				if token.IsExported(method.Name()) && method.TypeParams().Len() > 0 {
 					found = append(found, method)
 				}
 			}

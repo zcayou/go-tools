@@ -64,6 +64,19 @@ var _ = Describe("Analyze", func() {
 				"main.go:36:16: unreachable func: ViaFunc.src",
 			}),
 
+		// Holder and Carrier are boxed, and each mentions one more type only through
+		// a method reflection cannot call: Holder's generic Make returns a Box,
+		// and Carrier's unexported payload a Payload. Neither is materialized, so
+		// fmt's Stringer assertion credits neither String. Box's is reported as dead;
+		// RTA still derives Payload through the unexported signature, so Payload's
+		// is alive through reflection alone, and reported as that.
+		Entry("derives no evidence through a method reflection cannot call",
+			"signaturederivation", []string{
+				"main.go:14:15: unreachable func: Box.String",
+				"main.go:25:16: unused reflection-live exported method: Payload.String",
+				"main.go:14:15: unused exported method: Box.String",
+			}),
+
 		// A reflect-typed container: constructors registered as any, invoked through
 		// reflect, products surfaced behind interfaces by an assertion
 		// in a dependency body SSA never builds. The derived-type closure over
@@ -187,6 +200,18 @@ var _ = Describe("Analyze", func() {
 				"lib.go:11:6: unused exported func: Unused",
 			}),
 	)
+
+	It("measures a program whose runtime types declare generic methods", func(ctx SpecContext) {
+		// Box becomes a runtime type, so RTA walks a method set holding generic
+		// methods. Unused, called nowhere, draws what an uncalled method of any kind
+		// would, and so does what only it reaches; Map, Convert, and the generic
+		// function an assignment instantiates by inference stay live.
+		Expect(analyzeFixture(ctx, "genericmethods")).To(Equal([]string{
+			"main.go:15:14: unreachable func: Box.Unused",
+			"main.go:17:6: unreachable func: onlyFromUnused",
+			"main.go:15:14: unused exported method: Box.Unused",
+		}))
+	})
 
 	It("roots an example with no output comment, which the test main never registers", func(ctx SpecContext) {
 		// ExampleCompute and its helper draw no plain verdict — the example is rooted
@@ -656,6 +681,23 @@ var _ = Describe("Analyze", func() {
 					To(ContainElement("lib/lib.go:45:6: test-only unreachable func: auditHelper"))
 			})
 
+			It("walks a generic method of a type that is not generic", func(ctx SpecContext) {
+				// Set roots without help, but x/tools builds no method value for Rare
+				// or Opaque, so rooting Set's method set reaches neither. Nothing
+				// instantiates them, so each is walked the way any uninstantiated generic
+				// on the surface is: rareHelper is live, and Opaque, whose call the walk
+				// cannot follow, says so.
+				Expect(analyzeWith(ctx, "apigenericmethods", generic(engine.GenericRootingInstantiated))).To(Equal([]string{
+					"lib/lib.go:21:12: unmeasured generic: Set.Opaque",
+				}))
+			})
+
+			It("leaves what a generic method alone reaches unrooted under skip", func(ctx SpecContext) {
+				Expect(analyzeWith(ctx, "apigenericmethods", generic(engine.GenericRootingSkip))).To(Equal([]string{
+					"lib/lib.go:17:6: unreachable func: rareHelper",
+				}))
+			})
+
 			It("rejects a generic rooting with no api patterns", func(ctx SpecContext) {
 				_, err := engine.Analyze(ctx, engine.Config{
 					Dir:         fixtureDir("control"),
@@ -784,6 +826,19 @@ var _ = Describe("Analyze", func() {
 				// is the answer that already existed.
 				Expect(analyzeWith(ctx, "sealedsurface", engine.Config{API: []string{"./..."}})).
 					To(ContainElement("lib/lib.go:64:14: unused exported method: Plain.Label"))
+			})
+
+			It("weighs a contract a generic method exposes at the instantiation its parameters name", func(ctx SpecContext) {
+				// Taken mentions only Pipe's parameter, so it is weighed at Pipe[int]
+				// though Drain is instantiated nowhere; Keyed mentions only Keys' own;
+				// Paired mentions both, which only Pairs' instantiation pairs. Every
+				// implementation is credited. Nothing in the module selects the contracts'
+				// methods, and that is all that is reported.
+				Expect(analyzeWith(ctx, "sealedgenericmethods", sealed("./..."))).To(Equal([]string{
+					"lib/lib.go:13:37: unused interface method: Taken.taken",
+					"lib/lib.go:22:37: unused interface method: Keyed.key",
+					"lib/lib.go:32:45: unused interface method: Paired.pair",
+				}))
 			})
 		})
 

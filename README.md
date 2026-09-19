@@ -259,7 +259,7 @@ Module plugins are compiled in, so a consumer builds its own binary. Add
 `.custom-gcl.yml` at the repository root:
 
 ```yaml
-version: v2.12.2
+version: v2.13.2
 name: custom-gcl
 destination: ./bin
 plugins:
@@ -268,10 +268,10 @@ plugins:
     version: v0.1.0   # a released tag; see the repository's tags for the current one
 ```
 
-Install the matching bootstrap binary and build (requires Go 1.26+):
+Install the matching bootstrap binary and build (requires Go 1.27+):
 
 ```bash
-go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
+go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2
 golangci-lint custom
 ```
 

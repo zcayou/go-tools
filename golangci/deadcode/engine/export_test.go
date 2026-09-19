@@ -52,6 +52,19 @@ func (e *evidence) Granted(t types.Type) bool {
 	return e.evident(t)
 }
 
+// Closure exposes every type the closure visited with its grant, so the whole
+// closure is comparable against RTA's runtime types.
+func (e *evidence) Closure(yield func(t types.Type, granted bool) bool) {
+	done := false
+	e.granted.Iterate(func(t types.Type, value any) {
+		if done {
+			return
+		}
+		granted, _ := value.(bool)
+		done = !yield(t, granted)
+	})
+}
+
 // NewFileFacts exposes newFileFacts.
 var NewFileFacts = newFileFacts
 

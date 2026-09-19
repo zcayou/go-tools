@@ -188,27 +188,39 @@
 // asserting Stringer and error in its own source would spare every method
 // of those names in every program that imports fmt, which is every program.
 //
-// Materialization is judged against the same evidence liveness uses:
-// the derived-type closure of every conversion operand, computed
-// with the derivation rules of RTA's addRuntimeType at the pinned x/tools
-// version — struct fields, pointer, slice, array, chan and map constituents,
-// map keys included, and the parameter and result types of signatures
-// and of exported methods, with a named type's underlying and a signature's
-// tuples traversed but granted nothing, because reflection cannot obtain
-// a method set there. The closure additionally seeds from the resolved type
-// arguments of reflect.TypeFor, whose descriptor no conversion ever carried.
-// One evidence base for both sides is load-bearing: RTA keeps every exported
-// method of every derived type alive, so a credit gate consulting anything
-// narrower refuses exactly the methods liveness cannot explain — and alive but
-// uncreditable is the false-positive space. That argument is about exported
-// methods, because reflection reaches nothing else off a derived type, so
-// an unexported method is credited against the closure's seeds alone —
-// the conversion operands and reflect.TypeFor arguments — rather than
-// everything derived from them. Otherwise a sealed interface's marker would
-// be credited wherever its receiver happened to be the result type of some
-// other type's exported method, which says nothing about whether the marker
-// is ever invoked. A method of a generic type is judged by its origin, which
-// the closure records alongside every instantiation that enters it.
+// Materialization is judged against the evidence liveness uses:
+// the derived-type closure of every conversion operand, computed by what
+// reflection can obtain from the operand — struct fields, pointer, slice,
+// array, chan and map constituents, map keys included, and the parameter
+// and result types of signatures and of exported, non-generic methods,
+// with a named type's underlying and a signature's tuples traversed but granted
+// nothing, because reflection cannot obtain a method set there. The closure
+// additionally seeds from the resolved type arguments of reflect.TypeFor, whose
+// descriptor no conversion ever carried. One evidence base for both sides
+// is load-bearing: RTA keeps every exported method of every derived type alive,
+// so a credit gate consulting anything narrower refuses exactly the methods
+// liveness cannot explain — and alive but uncreditable is the false-positive
+// space.
+//
+// RTA's derivation departs from reflection's in two places, and the closure
+// follows reflection in both. RTA also derives through unexported methods'
+// signatures, which reflection cannot call, so a type only such a signature
+// mentions is one no program value ever has: an exported method
+// on it that nothing selects or binds is reported as reflection-live, which
+// is exactly what that verdict says — alive through reflection alone — rather
+// than a false positive. And at the pinned x/tools version RTA derives nothing
+// from a type it first reaches through an alias, a shortfall against reflection
+// that the closure does not copy.
+//
+// The crediting argument is about exported methods, because reflection reaches
+// nothing else off a derived type, so an unexported method is credited against
+// the closure's seeds alone — the conversion operands and reflect.TypeFor
+// arguments — rather than everything derived from them. Otherwise a sealed
+// interface's marker would be credited wherever its receiver happened
+// to be the result type of some other type's exported method, which says
+// nothing about whether the marker is ever invoked. A method of a generic type
+// is judged by its origin, which the closure records alongside every
+// instantiation that enters it.
 //
 // Type parameters in the evidence are resolved, never pattern-matched. Every
 // generic object's fully concrete type-argument vectors are read from

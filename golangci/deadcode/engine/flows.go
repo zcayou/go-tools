@@ -3,7 +3,6 @@ package engine
 import (
 	"go/token"
 	"go/types"
-	"slices"
 
 	"golang.org/x/tools/go/ssa"
 	"golang.org/x/tools/go/ssa/ssautil"
@@ -133,17 +132,17 @@ func flowEdges(prog *ssa.Program, inst *instantiations, refs *methodReferenceSca
 
 	for obj, vectors := range inst.all {
 		params := typeParams(obj)
-		if params == nil {
+		if len(params) == 0 {
 			continue
 		}
 		for _, vector := range vectors {
-			if len(vector) != params.Len() {
+			if len(vector) != len(params) {
 				continue
 			}
-			env := environment(slices.Collect(params.TypeParams()), vector)
+			env := environment(params, vector)
 			for i, argument := range vector {
 				if interfaceEndpoint(argument) {
-					add(argument, params.At(i).Constraint(), vectorKey(vector), env)
+					add(argument, params[i].Constraint(), vectorKey(vector), env)
 				}
 			}
 		}

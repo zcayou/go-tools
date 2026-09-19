@@ -37,6 +37,17 @@ import (
 // gates are the same question asked of what each kind of method is reachable
 // through.
 //
+// The same reach bounds the derivation itself, and RTA departs from it in two
+// places. RTA also derives through the signatures of unexported methods, which
+// reflection cannot call, so a type only such a signature mentions never
+// materializes: an exported method on it that nothing selects or binds
+// is reported reflection-live, the verdict for exactly a method RTA keeps alive
+// through reflection alone. And at the pinned x/tools version RTA derives
+// nothing from a type it first reaches through an alias, where reflection
+// reaches everything the unaliased spelling would, so the closure derives
+// from it regardless. Neither derives through a generic method's signature,
+// since reflection cannot call a generic method.
+//
 // The closure additionally seeds from the resolved type arguments
 // of reflect.TypeFor, which conjures a type descriptor no MakeInterface ever
 // carried — reflect.Zero on it produces the value the operand sweep never saw.
@@ -164,8 +175,8 @@ func (e *evidence) addConversion(operand, iface types.Type) {
 	ifaces.Set(iface, true)
 }
 
-// derive adds t to the closure with the derivation rules of RTA's
-// addRuntimeType at the pinned x/tools version, and grants evidence wherever
+// derive adds t to the closure with the derivation rules of reflection's reach,
+// which the evidence type weighs against RTA's, and grants evidence wherever
 // a non-skip position reaches a type. A skip position — a named type's
 // underlying, a signature's parameter or result tuple — is traversed but
 // granted nothing: reflection cannot obtain the method set of what sits there.
@@ -186,14 +197,9 @@ func (e *evidence) derive(t types.Type, skip bool) {
 	}
 	e.record(t, !skip)
 
-	if named := namedForm(t); named != nil && named.Obj().Pkg() == nil {
-		// The built-in error type: nothing to derive, matching RTA.
-		return
-	}
-
 	for method := range e.msets.MethodSet(t).Methods() {
 		fn, ok := method.Obj().(*types.Func)
-		if !ok || !fn.Exported() {
+		if !ok || !fn.Exported() || fn.Signature().TypeParams() != nil {
 			continue
 		}
 		e.derive(fn.Signature().Params(), true)
@@ -248,19 +254,6 @@ func (e *evidence) deriveShape(t types.Type) {
 	}
 	// Basic types and interfaces derive nothing beyond the method-set recursion
 	// above.
-}
-
-// namedForm unwraps to the named type behind t, through one pointer, the way
-// RTA's built-in-error check does.
-func namedForm(t types.Type) *types.Named {
-	switch t := t.(type) {
-	case *types.Named:
-		return t
-	case *types.Pointer:
-		named, _ := types.Unalias(t.Elem()).(*types.Named)
-		return named
-	}
-	return nil
 }
 
 // reflectTypeForArguments returns the first type argument of every resolved

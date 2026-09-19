@@ -1,8 +1,13 @@
 package engine_test
 
 import (
+	"go/types"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"golang.org/x/tools/go/callgraph/rta"
+	"golang.org/x/tools/go/ssa"
+	"golang.org/x/tools/go/types/typeutil"
 
 	"github.com/zcayou/go-tools/golangci/deadcode/engine"
 )
@@ -145,6 +150,143 @@ func run() { _ = descriptor[Secret]() }
 
 		Expect(ev.Materialized(namedMethod(pkgs[1], "Secret", "Reveal"))).To(BeTrue())
 		Expect(ev.Materialized(namedMethod(pkgs[1], "Shadow", "Reveal"))).To(BeFalse())
+	})
+
+	It("derives nothing through a generic method's signature", func() {
+		pkgs := typecheckPackages(`package genericsig
+
+type Holder struct{}
+
+func (Holder) Make[F any]() *Box[F] { return nil }
+
+type Box[V any] struct{}
+
+func (Box[V]) Show() {}
+
+func sink(v any) {}
+
+func run() { sink(Holder{}) }
+`)
+		ev := engine.NewEvidence(buildSSA(pkgs), engine.NewInstantiations(pkgs))
+
+		// Reflection cannot call Make, so nothing it returns is a value the program
+		// can hold, and Box's origin is never recorded.
+		Expect(ev.Materialized(namedMethod(pkgs[0], "Box", "Show"))).To(BeFalse())
+	})
+
+	It("derives nothing through an unexported method's signature", func() {
+		pkgs := typecheckPackages(`package unexportedsig
+
+type Carrier struct{}
+
+func (Carrier) payload() Payload { return Payload{} }
+
+type Payload struct{}
+
+func (Payload) Show() {}
+
+func sink(v any) {}
+
+func run() { sink(Carrier{}) }
+`)
+		ev := engine.NewEvidence(buildSSA(pkgs), engine.NewInstantiations(pkgs))
+
+		Expect(ev.Materialized(namedMethod(pkgs[0], "Payload", "Show"))).To(BeFalse())
+	})
+
+	It("derives what RTA derives, apart from the departures it documents", func() {
+		// Every conversion sits in a function RTA reaches from run, so both start
+		// from the same operands and any difference is a derivation rule. The source
+		// spans every shape a rule covers.
+		pkgs := typecheckPackages(`package conformance
+
+type Leaf struct{ N int }
+
+func (Leaf) Value() int { return 0 }
+
+type Embedded struct{ Leaf }
+
+type Key struct{ K string }
+
+type Fields struct {
+	P *Leaf
+	S []Embedded
+	M map[Key][2]Leaf
+	C chan<- error
+	F func(int) (Leaf, error)
+	A Aliased
+}
+
+type Target struct{}
+
+func (*Target) Ptr() string { return "" }
+
+type Aliased = Target
+
+type Carrier struct{}
+
+func (Carrier) Make(fields Fields) (*Result, error) { return nil, nil }
+
+type Result struct{}
+
+func (Carrier) Generic[T any]() *Box[T] { return nil }
+
+type Box[T any] struct{ value T }
+
+func (Carrier) hidden() Hidden { return Hidden{} }
+
+type Hidden struct{ Next *HiddenLeaf }
+
+type HiddenLeaf struct{}
+
+func sink(v any) {}
+
+func run() {
+	sink(Carrier{})
+	sink(Fields{})
+}
+`)
+		prog := buildSSA(pkgs)
+		ev := engine.NewEvidence(prog, engine.NewInstantiations(pkgs))
+		res := rta.Analyze([]*ssa.Function{prog.Package(pkgs[0].Types).Func("run")}, false)
+
+		// Both sides key by type identity, which an alias shares with what it names,
+		// so the comparison does too.
+		closure := new(typeutil.Map)
+		for t, grant := range ev.Closure {
+			closure.Set(t, grant)
+		}
+		var rtaOnly, closureOnly, disagreeing []string
+		res.RuntimeTypes.Iterate(func(t types.Type, value any) {
+			inaccessible, _ := value.(bool)
+			grant, ok := closure.At(t).(bool)
+			switch {
+			case !ok:
+				rtaOnly = append(rtaOnly, t.String())
+			case grant == inaccessible:
+				disagreeing = append(disagreeing, t.String())
+			}
+		})
+		for t := range ev.Closure {
+			if res.RuntimeTypes.At(t) == nil {
+				closureOnly = append(closureOnly, t.String())
+			}
+		}
+
+		Expect(disagreeing).To(BeEmpty())
+		// RTA derives through hidden's signature, which reflection cannot call.
+		Expect(rtaOnly).To(ConsistOf(
+			"(conformance.Hidden)",
+			"conformance.Hidden",
+			"*conformance.Hidden",
+			"struct{Next *conformance.HiddenLeaf}",
+			"conformance.HiddenLeaf",
+			"*conformance.HiddenLeaf",
+		))
+		// At the pinned x/tools version RTA derives nothing from a type it first
+		// reaches through an alias. A version where this fails has corrected that,
+		// and the entry goes.
+		Expect(closureOnly).To(ConsistOf("*conformance.Target"))
 	})
 
 	It("yields each distinct conversion pair once", func() {
