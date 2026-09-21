@@ -1,6 +1,11 @@
 package suitecontents_test
 
-import "testing"
+import (
+	"testing"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+)
 
 var _ = BeforeSuite(func() {})
 
@@ -24,6 +29,8 @@ type unwantedType struct{} // want `suite-file-contents: a type declaration; a s
 var unwantedVar = 2 // want `suite-file-contents: a variable declaration; a suite file holds`
 
 var _ = alwaysTrue // want `suite-file-contents: a variable declaration; a suite file holds`
+
+var _ = hooks.BeforeSuite(func() {}) // want `suite-file-contents: a variable declaration; a suite file holds`
 
 var _ = func() bool { return true }() // want `suite-file-contents: a variable declaration; a suite file holds`
 

@@ -8,14 +8,26 @@ import (
 	"go/token"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 )
 
-// specBuilders are the Ginkgo container and leaf builders. A call to one marks
-// the file as spec-bearing and the package as using Ginkgo, which is what puts
-// it under the adapter rules.
+// ginkgoPackages are the Ginkgo packages a builder, a suite hook, or RunSpecs
+// is reached through, each mapped to the name it declares, which is what a file
+// refers to it by unless the import renames it. The dsl packages re-export
+// slices of the root package, for a file that dot-imports only some of it.
+var ginkgoPackages = map[string]string{
+	"github.com/onsi/ginkgo/v2":               "ginkgo",
+	"github.com/onsi/ginkgo/v2/dsl/core":      "core",
+	"github.com/onsi/ginkgo/v2/dsl/reporting": "reporting",
+	"github.com/onsi/ginkgo/v2/dsl/table":     "table",
+}
+
+// specBuilders are the Ginkgo container and leaf builders. A call to one
+// through a Ginkgo import marks the file as spec-bearing and the package
+// as using Ginkgo, which is what puts it under the adapter rules.
 var specBuilders = map[string]bool{
 	"Describe": true, "FDescribe": true, "PDescribe": true, "XDescribe": true,
 	"Context": true, "FContext": true, "PContext": true, "XContext": true,
@@ -58,6 +70,7 @@ type info struct {
 }
 
 func inspect(file *ast.File) info {
+	imports := ginkgoImportsOf(file)
 	var found info
 	ast.Inspect(file, func(node ast.Node) bool {
 		switch node := node.(type) {
@@ -66,7 +79,7 @@ func inspect(file *ast.File) info {
 				found.specs = true
 			}
 		case *ast.CallExpr:
-			switch name := callName(node.Fun); {
+			switch name := imports.callName(node.Fun); {
 			case specBuilders[name]:
 				found.specs, found.ginkgo = true, true
 			case name == runSpecs && !found.adapter.IsValid():
@@ -128,14 +141,61 @@ func isTestName(name, prefix string) bool {
 	return !unicode.IsLower(first)
 }
 
-// callName is the identifier a call names, whether the package holding it was
-// dot-imported (It) or not (ginkgo.It).
-func callName(expr ast.Expr) string {
+// ginkgoImports is how one file refers to Ginkgo. It is read from the file's
+// imports rather than from type information, which the syntactic load mode
+// does not provide and a file read from disk would not have either.
+type ginkgoImports struct {
+	// dot reports whether the file dot-imports a Ginkgo package, which is what
+	// makes a bare It Ginkgo's.
+	dot bool
+
+	// names are the names the file imports a Ginkgo package under, declared
+	// or renamed, which is what makes ginkgo.It Ginkgo's.
+	names []string
+}
+
+func ginkgoImportsOf(file *ast.File) ginkgoImports {
+	var imports ginkgoImports
+	for _, spec := range file.Imports {
+		path, err := strconv.Unquote(spec.Path.Value)
+		if err != nil {
+			continue
+		}
+		name, ok := ginkgoPackages[path]
+		if !ok {
+			continue
+		}
+		if spec.Name != nil {
+			name = spec.Name.Name
+		}
+		switch name {
+		case ".":
+			imports.dot = true
+		case "_":
+			// A blank import brings nothing into the file to call.
+		default:
+			imports.names = append(imports.names, name)
+		}
+	}
+	return imports
+}
+
+// callName is the Ginkgo identifier a call names, or "" for a call that does
+// not reach Ginkgo: a bare It in a file dot-importing Ginkgo, or ginkgo.It
+// qualified by a name the file imports Ginkgo under. A method call such
+// as r.Context() is not a container however it is named, and nor
+// is a builder-named function declared outside Ginkgo. The one call misread
+// is through a local declaration shadowing an imported name.
+func (g ginkgoImports) callName(expr ast.Expr) string {
 	switch fun := expr.(type) {
 	case *ast.Ident:
-		return fun.Name
+		if g.dot {
+			return fun.Name
+		}
 	case *ast.SelectorExpr:
-		return fun.Sel.Name
+		if pkg, ok := fun.X.(*ast.Ident); ok && slices.Contains(g.names, pkg.Name) {
+			return fun.Sel.Name
+		}
 	}
 	return ""
 }

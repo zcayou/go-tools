@@ -1,6 +1,10 @@
 package conventional_test
 
-import "testing"
+import (
+	"testing"
+
+	. "github.com/onsi/ginkgo/v2"
+)
 
 var _ = BeforeSuite(func() {})
 

@@ -3,6 +3,6 @@
 // package's pass stays quiet about a problem this one reports.
 package mixedbad_test // want `ginkgo-adapter-missing: this package registers Ginkgo specs but no file calls RunSpecs`
 
-import "mixedbad"
+import . "github.com/onsi/ginkgo/v2"
 
-var _ = mixedbad.Describe("Gadget", func() {})
+var _ = Describe("Gadget", func() {})

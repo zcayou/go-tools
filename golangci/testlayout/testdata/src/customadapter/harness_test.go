@@ -2,7 +2,11 @@
 // belongs here and the suite-file rules apply here.
 package customadapter_test
 
-import "testing"
+import (
+	"testing"
+
+	. "github.com/onsi/ginkgo/v2"
+)
 
 var _ = BeforeSuite(func() {})
 

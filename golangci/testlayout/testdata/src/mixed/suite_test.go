@@ -2,7 +2,11 @@
 // one, which is the split ginkgo-adapter-missing has to see across.
 package mixed_test
 
-import "testing"
+import (
+	"testing"
+
+	. "github.com/onsi/ginkgo/v2"
+)
 
 func TestMixed(t *testing.T) {
 	RunSpecs(t, "Mixed Suite")

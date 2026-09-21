@@ -19,8 +19,9 @@ var suiteHooks = map[string]bool{
 }
 
 // suiteDecl classifies one top-level declaration of a suite file: what it is,
-// for a diagnostic to name, and whether the file may hold it.
-func suiteDecl(decl ast.Decl) (what string, allowed bool) {
+// for a diagnostic to name, and whether the file may hold it. imports are how
+// the file refers to Ginkgo.
+func suiteDecl(decl ast.Decl, imports ginkgoImports) (what string, allowed bool) {
 	switch decl := decl.(type) {
 	case *ast.GenDecl:
 		switch decl.Tok {
@@ -31,7 +32,7 @@ func suiteDecl(decl ast.Decl) (what string, allowed bool) {
 		case token.CONST:
 			return "a constant declaration", false
 		case token.VAR:
-			return suiteVar(decl)
+			return suiteVar(decl, imports)
 		}
 	case *ast.FuncDecl:
 		switch {
@@ -48,8 +49,9 @@ func suiteDecl(decl ast.Decl) (what string, allowed bool) {
 // suiteVar classifies a var declaration. The blank assignment a suite hook
 // is registered through is what the file is for; a spec registered the same way
 // is the thing it must not hold, and is named as such because the two read
-// alike.
-func suiteVar(decl *ast.GenDecl) (what string, allowed bool) {
+// alike. Either is Ginkgo's only through a Ginkgo import, so a method
+// that shares a hook's name is a variable declaration like any other.
+func suiteVar(decl *ast.GenDecl, imports ginkgoImports) (what string, allowed bool) {
 	hooks, specs := 0, 0
 	for _, spec := range decl.Specs {
 		value, ok := spec.(*ast.ValueSpec)
@@ -60,7 +62,7 @@ func suiteVar(decl *ast.GenDecl) (what string, allowed bool) {
 		if !ok {
 			continue
 		}
-		switch name := callName(call.Fun); {
+		switch name := imports.callName(call.Fun); {
 		case suiteHooks[name]:
 			hooks++
 		case specBuilders[name]:

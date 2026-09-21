@@ -1,15 +1,5 @@
 package conventional_test
 
-import "testing"
-
-// Ginkgo is not on a fixture's import path, since analysistest loads with
-// GOPROXY=off, so the builders the rules match by name are declared here.
-func Describe(text string, body func()) bool { body(); return true }
-
-func It(text string, body func()) bool { body(); return true }
-
-func BeforeSuite(body func()) bool { body(); return true }
-
-func AfterSuite(body func()) bool { body(); return true }
-
-func RunSpecs(t *testing.T, description string) { t.Log(description) }
+// fakeWidget stands in for conventional.Widget where a spec needs a value
+// it controls.
+func fakeWidget() int { return 1 }

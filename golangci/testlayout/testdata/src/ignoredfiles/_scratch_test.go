@@ -2,7 +2,11 @@
 // adapter here is not in the test binary either.
 package ignoredfiles_test
 
-import "testing"
+import (
+	"testing"
+
+	. "github.com/onsi/ginkgo/v2"
+)
 
 func TestScratch(t *testing.T) {
 	RunSpecs(t, "Ignored Files Scratch Suite")

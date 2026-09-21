@@ -4,7 +4,11 @@
 // binary and does not answer for the specs in widget_test.go.
 package ignoredfiles_test
 
-import "testing"
+import (
+	"testing"
+
+	. "github.com/onsi/ginkgo/v2"
+)
 
 func TestIntegration(t *testing.T) {
 	RunSpecs(t, "Ignored Files Integration Suite")

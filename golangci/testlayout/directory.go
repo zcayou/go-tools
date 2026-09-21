@@ -92,8 +92,11 @@ func (s sources) declareNothing(path string) (bool, error) {
 	return true, nil
 }
 
-// isBuildVariant reports whether name is base under a GOOS or GOARCH file-name
-// constraint, the implicit build tag go/build reads out of a name.
+// isBuildVariant reports whether name is base under a platform file-name
+// suffix: a GOOS or GOARCH constraint, the implicit build tag go/build reads
+// out of a name, or _unix. go/build reads no constraint out of _unix, but
+// it is how the unix side of a source split along the unix build tag is named,
+// and the test for that source is named for the source all the same.
 func isBuildVariant(name, base string) bool {
 	rest, ok := strings.CutPrefix(name, base+"_")
 	if !ok {
@@ -111,15 +114,20 @@ func isBuildVariant(name, base string) bool {
 
 // goosValues and goarchValues are the values go/build recognizes
 // in the trailing element of a file name, which is where the constraint a name
-// carries comes from.
+// carries comes from. They are copied from the toolchain's internal/syslist,
+// which nothing exported carries, and goosValues adds unix for the reason
+// [isBuildVariant] gives.
 var goosValues = map[string]bool{
-	"aix": true, "android": true, "darwin": true, "dragonfly": true, "freebsd": true,
-	"illumos": true, "ios": true, "js": true, "linux": true, "netbsd": true, "openbsd": true,
-	"plan9": true, "solaris": true, "unix": true, "wasip1": true, "windows": true,
+	"aix": true, "android": true, "darwin": true, "dragonfly": true, "freebsd": true, "hurd": true,
+	"illumos": true, "ios": true, "js": true, "linux": true, "nacl": true, "netbsd": true,
+	"openbsd": true, "plan9": true, "solaris": true, "unix": true, "wasip1": true, "windows": true,
+	"zos": true,
 }
 
 var goarchValues = map[string]bool{
-	"386": true, "amd64": true, "arm": true, "arm64": true, "loong64": true, "mips": true,
-	"mips64": true, "mips64le": true, "mipsle": true, "ppc64": true, "ppc64le": true,
-	"riscv64": true, "s390x": true, "wasm": true,
+	"386": true, "amd64": true, "amd64p32": true, "arm": true, "armbe": true, "arm64": true,
+	"arm64be": true, "loong64": true, "mips": true, "mipsle": true, "mips64": true, "mips64le": true,
+	"mips64p32": true, "mips64p32le": true, "ppc": true, "ppc64": true, "ppc64le": true,
+	"riscv": true, "riscv64": true, "s390": true, "s390x": true, "sparc": true, "sparc64": true,
+	"wasm": true,
 }

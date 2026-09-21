@@ -39,6 +39,14 @@ var _ = Describe("Analyzer", func() {
 		runAnalysis(testlayout.Settings{}, "builders")
 	})
 
+	It("recognizes Ginkgo however a file imports it", func() {
+		runAnalysis(testlayout.Settings{}, "ginkgoimports")
+	})
+
+	It("takes no call for Ginkgo's that does not go through an import of it", func() {
+		runAnalysis(testlayout.Settings{}, "lookalikes")
+	})
+
 	It("reports a Ginkgo adapter outside the files reserved for it", func() {
 		runAnalysis(testlayout.Settings{}, "adapterfile")
 	})

@@ -3,6 +3,8 @@
 // _test suffix because there is no package to be outside of.
 package standalone
 
+import . "github.com/onsi/ginkgo/v2"
+
 var _ = Describe("Create", func() {
 	It("creates", func() {})
 })

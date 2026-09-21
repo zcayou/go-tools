@@ -168,8 +168,9 @@ func (c *checker) checkSuiteFile(pass *analysis.Pass, file testFile, srcs source
 	if !c.config.adapters.matches(file.name, srcs) {
 		return
 	}
+	imports := ginkgoImportsOf(file.syntax)
 	for _, decl := range file.syntax.Decls {
-		if what, allowed := suiteDecl(decl); !allowed {
+		if what, allowed := suiteDecl(decl, imports); !allowed {
 			report(pass, decl.Pos(), RuleSuiteFileContents, what+
 				"; a suite file holds the test entry point and the suite-level hooks, nothing else")
 		}

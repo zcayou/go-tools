@@ -1,5 +1,5 @@
 package adaptermissing_test // want `ginkgo-adapter-missing: this package registers Ginkgo specs but no file calls RunSpecs`
 
-func Describe(text string, body func()) bool { body(); return true }
+import "github.com/onsi/ginkgo/v2"
 
-var _ = Describe("Widget", func() {})
+var _ = ginkgo.Describe("Widget", func() {})

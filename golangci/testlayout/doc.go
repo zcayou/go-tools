@@ -38,7 +38,9 @@
 // is what lets "<source>_test.go" mean "named for the source it exercises"
 // rather than naming any file in particular. A source split under a GOOS
 // or GOARCH file name satisfies it, so platform_test.go is named
-// for platform_linux.go and is not read as naming nothing.
+// for platform_linux.go and is not read as naming nothing. So does one split
+// under _unix, which go/build reads no constraint out of but which is how
+// the unix side of a split along the unix build tag is named.
 //
 // A file matching a helper pattern is required to carry no specs, rather than
 // merely permitted to carry none. The two lists therefore divide the allowed
@@ -50,9 +52,18 @@
 // A file carries specs when it calls a Ginkgo container or leaf builder,
 // or declares a function — not a method — named for a go test entry point:
 // Test, Benchmark, Fuzz, or Example followed by nothing or by a rune
-// that is not lower case, which is the rule go test itself applies. Calls
-// are matched by name, so a dot-imported Describe and a ginkgo.Describe count
-// alike, and no import is resolved to find out.
+// that is not lower case, which is the rule go test itself applies.
+//
+// A call is Ginkgo's when the file's imports make it so: a bare Describe
+// in a file dot-importing Ginkgo, or a ginkgo.Describe qualified by the name
+// the file imports Ginkgo under, declared or renamed. Ginkgo v2's root package
+// and the dsl packages re-exporting it count alike. Nothing else does:
+// r.Context() is a method call however it is named, and a builder-named
+// function that a test package declares for itself or a wrapper package exports
+// is not Ginkgo's. The same reading decides a RunSpecs call and a suite hook.
+// It is syntactic, so it holds for a file read from disk as it does for one
+// the pass holds; the one call it misreads goes through a local declaration
+// shadowing a name an import brought in.
 //
 // # The standalone package
 //

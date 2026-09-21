@@ -2,11 +2,11 @@
 // not exist: only the kind is reported.
 package disallowedextras // want `test-package: whitebox test files are not allowed; declare package disallowedextras_test`
 
-import "testing"
+import (
+	"testing"
 
-func Describe(text string, body func()) bool { body(); return true }
-
-func RunSpecs(t *testing.T, description string) { t.Log(description) }
+	. "github.com/onsi/ginkgo/v2"
+)
 
 var _ = Describe("Widget", func() {})
 
