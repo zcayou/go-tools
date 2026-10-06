@@ -11,8 +11,8 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"golang.org/x/tools/go/packages"
-	"golang.org/x/tools/go/ssa"
-	"golang.org/x/tools/go/ssa/ssautil"
+
+	"github.com/zcayou/go-tools/golangci/deadcode/engine"
 )
 
 // typecheckPackages type checks single-file packages in order, later sources
@@ -127,10 +127,10 @@ func interfaceMethod(pkg *packages.Package, typeName, methodName string) *types.
 
 // buildSSA builds the typechecked packages into an SSA program the way
 // the engine does.
-func buildSSA(pkgs []*packages.Package) *ssa.Program {
+func buildSSA(pkgs []*packages.Package) *engine.Program {
 	GinkgoHelper()
 
-	prog, _ := ssautil.Packages(pkgs, ssa.InstantiateGenerics)
-	prog.Build()
+	prog, _, err := engine.BuildProgram(pkgs)
+	Expect(err).NotTo(HaveOccurred())
 	return prog
 }

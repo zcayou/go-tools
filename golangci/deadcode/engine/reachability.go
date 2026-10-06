@@ -12,7 +12,6 @@ import (
 	"golang.org/x/tools/go/callgraph/rta"
 	"golang.org/x/tools/go/packages"
 	"golang.org/x/tools/go/ssa"
-	"golang.org/x/tools/go/ssa/ssautil"
 )
 
 // ErrNoRoots is returned when the loaded packages offer nothing to root at, so
@@ -48,7 +47,7 @@ type reachability struct {
 // Instantiations and credited methods are admitted by declaration instead,
 // for the reasons instantiatedRoots and creditedMethods give.
 func selectRoots(
-	prog *ssa.Program,
+	prog *program,
 	ssaPkgs []*ssa.Package,
 	initial []*packages.Package,
 	surface *apiSurface,
@@ -148,7 +147,7 @@ func selectRoots(
 // of a generic type until something instantiates it. A method the view does
 // not admit roots nothing: under the masked view its body is test code.
 func creditedMethods(
-	prog *ssa.Program,
+	prog *program,
 	sealed *sealedSurface,
 	participation func(key string) bool,
 	v view,
@@ -157,7 +156,7 @@ func creditedMethods(
 		return fn.Pos().IsValid() && v.admitsFunction(prog.Fset, fn) &&
 			participation(declKey(position(prog.Fset, fn.Pos())))
 	}
-	for fn := range ssautil.AllFunctions(prog) {
+	for fn := range prog.funcs {
 		if !sealed.holds(fn) || !credited(fn) {
 			continue
 		}
@@ -183,7 +182,7 @@ func creditedMethods(
 // The credit spares the name's own verdicts; rooting it keeps what rendering
 // a member calls live with it, rather than reporting that on exactly the claim
 // the name was spared. A name the view does not admit roots nothing.
-func publishedNames(prog *ssa.Program, vocab *vocabulary, v view) []*ssa.Function {
+func publishedNames(prog *program, vocab *vocabulary, v view) []*ssa.Function {
 	var roots []*ssa.Function
 	for _, method := range vocab.methods {
 		if fn := prog.FuncValue(method); fn != nil && v.admitsFunction(prog.Fset, fn) {
@@ -241,7 +240,7 @@ func testEntries(pkg *ssa.Package) []*ssa.Function {
 // the participation verdicts just refused to.
 func unreachableFuncs(
 	ctx context.Context,
-	prog *ssa.Program,
+	prog *program,
 	ssaPkgs []*ssa.Package,
 	initial []*packages.Package,
 	surface *apiSurface,
@@ -280,7 +279,7 @@ func unreachableFuncs(
 // unreachableDecls scans the analyzed declarations for function declarations
 // reachability does not cover.
 func unreachableDecls(
-	prog *ssa.Program,
+	prog *program,
 	initial []*packages.Package,
 	facts map[*packages.Package]fileFacts,
 	reach reachability,
@@ -347,7 +346,7 @@ func unreachableDecls(
 // Code a generic API alone reaches is therefore reported as unreachable —
 // the cost of measuring liveness against a generic public API, and what
 // [GenericRootingInstantiated] answers by rooting instantiations instead.
-func exportedRoots(prog *ssa.Program, pkg *ssa.Package, deadTypes map[string]bool) []*ssa.Function {
+func exportedRoots(prog *program, pkg *ssa.Package, deadTypes map[string]bool) []*ssa.Function {
 	if pkg == nil || !exportedRootPackage(pkg.Pkg.Path()) {
 		return nil
 	}
@@ -397,7 +396,7 @@ func exportedRootPackage(path string) bool {
 	return true
 }
 
-func exportedMethods(prog *ssa.Program, receiver types.Type) []*ssa.Function {
+func exportedMethods(prog *program, receiver types.Type) []*ssa.Function {
 	if named, ok := receiver.(*types.Named); ok && named.TypeParams().Len() > 0 {
 		return nil
 	}
@@ -463,13 +462,13 @@ func reachableThroughCallGraph(roots []*ssa.Function, res *rta.Result, fset *tok
 // the files a view admits: for a library, the only code instantiating its
 // public generics is usually its own tests, and refusing those would leave
 // the surface unrooted in exactly the view the question is asked in.
-func instantiatedRoots(prog *ssa.Program, generics []*types.Func) []*ssa.Function {
+func instantiatedRoots(prog *program, generics []*types.Func) []*ssa.Function {
 	surface := make(map[string]bool, len(generics))
 	for _, generic := range generics {
 		surface[declKey(position(prog.Fset, generic.Pos()))] = true
 	}
 	var roots []*ssa.Function
-	for fn := range ssautil.AllFunctions(prog) {
+	for fn := range prog.funcs {
 		origin := fn.Origin()
 		if origin == nil || origin == fn || !concreteInstance(fn) {
 			continue
@@ -518,9 +517,9 @@ func receiverOrigin(fn *ssa.Function) *types.Named {
 // a package and its test variant carry distinct functions for one source
 // declaration, and pointer identity would call a generic instantiated under one
 // of them uninstantiated under the other.
-func instantiatedOrigins(prog *ssa.Program) map[string]bool {
+func instantiatedOrigins(prog *program) map[string]bool {
 	instantiated := map[string]bool{}
-	for fn := range ssautil.AllFunctions(prog) {
+	for fn := range prog.funcs {
 		if origin := fn.Origin(); origin != nil && origin != fn && concreteInstance(fn) {
 			instantiated[declKey(position(prog.Fset, origin.Pos()))] = true
 		}
@@ -548,7 +547,7 @@ func instantiatedOrigins(prog *ssa.Program) map[string]bool {
 // the ones it walks there, so a generic that arrives twice, on the surface
 // and credited or once per package variant, is walked and reported once.
 func uninstantiatedRoots(
-	prog *ssa.Program,
+	prog *program,
 	generics []*ssa.Function,
 	settled map[string]bool,
 ) ([]*ssa.Function, []declaration) {
@@ -610,7 +609,7 @@ func walkGenericBody(generic *ssa.Function) ([]*ssa.Function, bool) {
 
 // unmeasuredDeclaration renders a generic the walk could not follow
 // as the finding that says so.
-func unmeasuredDeclaration(prog *ssa.Program, generic *ssa.Function) declaration {
+func unmeasuredDeclaration(prog *program, generic *ssa.Function) declaration {
 	name := generic.Name()
 	kind := KindFunc
 	owner := ""
@@ -710,7 +709,7 @@ func genericMethods(named types.Type) []*types.Func {
 // the declarations themselves: x/tools builds no method value
 // for a parameterized receiver or a generic method, so a method set yields
 // neither.
-func genericFuncs(prog *ssa.Program, generics []*types.Func) []*ssa.Function {
+func genericFuncs(prog *program, generics []*types.Func) []*ssa.Function {
 	funcs := make([]*ssa.Function, 0, len(generics))
 	for _, generic := range generics {
 		if fn := prog.FuncValue(generic); fn != nil {

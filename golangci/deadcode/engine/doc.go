@@ -134,6 +134,18 @@
 // or a dependency — because the copy is then how that declaration reaches
 // consumers at all.
 //
+// A function cannot be aliased, so the same copy of a function is a forwarder:
+// an exported function whose body is one call to another surface package's
+// function — returned, or made bare when there are no results — passing its own
+// type parameters and its own parameters, each once and in order, spreading
+// a variadic one, with a signature identical to the callee's, constraints
+// included. It adds a name and no behavior, whatever the name, and is judged
+// as the callee: it draws no verdict of any kind, unreachable included,
+// a reference to it counts for the callee, and its call is part of the callee's
+// extent. A function that reorders, adds a statement, narrows a constraint,
+// or forwards within its package or off the surface does something a call
+// to the original would not, and is a declaration of its own.
+//
 // # Interface participation
 //
 // A method counts as used when the program binds its receiver to an interface
@@ -247,6 +259,13 @@
 // it is matched, so evidence written against a type parameter credits exactly
 // what the concrete instantiations demand. An unresolvable vector or a failed
 // substitution credits nothing rather than guessing.
+//
+// The implementation is weighed the same way. Wherever a credit asks whether
+// a method's receiver satisfies an interface — an assertion, a dispatch,
+// a sealed contract — a generic receiver satisfies it as written only while its
+// methods leave its type parameters out. A method returning a type over one
+// matches only once the receiver is instantiated too, so the receiver
+// is weighed at each instantiation the program builds of it as well.
 //
 // Participation is one answer read by every method verdict: a method covered
 // by bind or dispatch evidence is reported neither as an unused method nor
@@ -371,17 +390,25 @@
 // A declared API package's tests are set aside with the rest, though
 // for a library they are often the only stand-ins for consumers in view.
 // [Config.APITestConsumers] counts them as such. Test-origin evidence aimed
-// at the declared surface — a reference to an exported declaration of an API
-// package, a selection of an exported method through an exported API type,
-// whatever type declares it, a conversion with an exported API type at either
-// end — is then admitted under the mask, so it decides which types are dead,
-// which methods root, and whether an API contract confers, exactly
-// as production evidence does. Filtering verdicts instead would decide none
-// of those. A contract test code declares confers unconditionally under it,
-// standing in for a consumer's own interface over a public type, whose call
-// sites no load can see. Test evidence aimed anywhere else stays masked:
-// a production declaration off the surface that only tests keep alive still
-// draws the family, and an API declaration nothing references, tests included,
+// at the declared surface is then admitted under the mask, so it decides which
+// types are dead, which methods root, which contracts confer, and how generic
+// evidence is specialized, exactly as production evidence does. Filtering
+// verdicts instead would decide none of those. Aimed at the surface means what
+// a consumer could write: a reference to an exported declaration of an API
+// package; a selection of an exported method through an exported API type,
+// whatever type declares it; a conversion, to an interface from a concrete type
+// or from another interface, with an exported API type at one end and at both
+// ends only types a consumer can name — exported API types, types test code
+// declares, a dependency's types, and what is built from them; and, unless
+// [GenericRootingSkip] declines the reading, an instantiation of an API
+// generic, or of a generic method selected through an API type, with type
+// arguments a consumer can name. A test supplying a production type the API
+// does not export does what no consumer can, and stays test evidence.
+// A contract test code declares confers unconditionally under it, standing
+// in for a consumer's own interface over a public type, whose call sites no
+// load can see. Test evidence aimed anywhere else stays masked: a production
+// declaration off the surface that only tests keep alive still draws
+// the family, and an API declaration nothing references, tests included,
 // is still reported.
 //
 // Some test code cannot be spelled as test code: a test plugin looks, feels,
@@ -401,6 +428,15 @@
 // set is an input: a narrower load changes interface ownership and answers
 // a different question. Masking holds the program constant, so the two
 // evaluations differ in exactly one variable — whether test evidence exists.
+//
+// Holding the program constant is a requirement on the SSA program as well
+// as on the load. x/tools builds a method of an instantiated type when
+// something first asks for it, reachability asks as it runs, and a body built
+// that way can make more types need their methods. The program is therefore
+// completed before anything reads it, revisited until a visit builds nothing
+// new, and every sweep of both views reads that one set of functions; read
+// as it grew, the second evaluation would find evidence in bodies the first
+// never saw.
 //
 // A program whose only entry points are tests is refused with [ErrNoRoots]:
 // with test roots set aside there is nothing to root at, and reachability

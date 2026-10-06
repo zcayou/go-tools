@@ -4,7 +4,6 @@ import (
 	"go/types"
 
 	"golang.org/x/tools/go/ssa"
-	"golang.org/x/tools/go/ssa/ssautil"
 	"golang.org/x/tools/go/types/typeutil"
 )
 
@@ -76,9 +75,9 @@ type evidence struct {
 	msets *typeutil.MethodSetCache
 }
 
-func newEvidence(prog *ssa.Program, inst *instantiations, sealed *sealedSurface, v view) *evidence {
+func newEvidence(prog *program, inst *instantiations, sealed *sealedSurface, v view) *evidence {
 	ev := &evidence{msets: &prog.MethodSets}
-	for fn := range ssautil.AllFunctions(prog) {
+	for fn := range prog.funcs {
 		for _, block := range fn.Blocks {
 			for _, instr := range block.Instrs {
 				conversion, ok := instr.(*ssa.MakeInterface)
@@ -260,7 +259,7 @@ func (e *evidence) deriveShape(t types.Type) {
 // concrete instantiation of reflect.TypeFor, dependencies' instantiations
 // included and parametric ones resolved transitively — the kmbldr corpus
 // resolves TypeFor three generics deep before a concrete vector appears.
-func reflectTypeForArguments(prog *ssa.Program, inst *instantiations) []types.Type {
+func reflectTypeForArguments(prog *program, inst *instantiations) []types.Type {
 	reflectPkg := prog.ImportedPackage("reflect")
 	if reflectPkg == nil {
 		return nil

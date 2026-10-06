@@ -23,3 +23,9 @@ func (r registrar) Append(name string) error {
 func Debug() string { return debugHelper() }
 
 func debugHelper() string { return "debug" }
+
+// Probe observes for the test alone. A consumer cannot name it, so the test
+// handing one to api.Notify stands in for no consumer.
+type Probe struct{}
+
+func (Probe) Observe(event string) { _ = event }

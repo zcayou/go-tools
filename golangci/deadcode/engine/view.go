@@ -26,17 +26,30 @@ type view struct {
 	// of tests, which is how a synthesized function with no position of its own
 	// is attributed. Only the masked view consults it.
 	testVariants map[*types.Package]bool
-	// consumers holds the declared API packages whose tests stand in for their
-	// consumers, empty unless [Config.APITestConsumers] is set. Only the masked
-	// view consults it: test-origin evidence aimed at their exported surface
-	// is admitted there as production evidence would be.
-	consumers map[string]bool
+	// consumers is what lets tests stand in for the declared API's consumers,
+	// nil unless [Config.APITestConsumers] is set. Only the masked view consults
+	// it: test-origin evidence aimed at the API's exported surface is admitted
+	// there as production evidence would be.
+	consumers *testConsumers
+}
+
+// testConsumers is what the masked view needs to judge test evidence
+// as a consumer's.
+type testConsumers struct {
+	// api holds the declared API packages.
+	api map[string]bool
+	// analyzed holds the packages this run reports on. A type declared anywhere
+	// else is a dependency's, which a consumer can name as freely as a test can.
+	analyzed map[string]bool
+	// instantiations says whether a test's instantiation of an API generic
+	// stands in for a consumer's. [GenericRootingSkip] declines that reading.
+	instantiations bool
 }
 
 // maskedView is the view that removes test-origin evidence from the loaded
-// program, with testFacing declared test origin as well. consumers is the API
-// packages whose test-origin evidence it admits nonetheless.
-func maskedView(pkgs []*packages.Package, testFacing, consumers map[string]bool) view {
+// program, with testFacing declared test origin as well. consumers, when not
+// nil, is the API whose test-origin evidence it admits nonetheless.
+func maskedView(pkgs []*packages.Package, testFacing map[string]bool, consumers *testConsumers) view {
 	variants := map[*types.Package]bool{}
 	for _, pkg := range pkgs {
 		if pkg.Types != nil && testVariant(pkg) {
@@ -65,23 +78,61 @@ func (v view) admitsSelection(path, file string, selection *types.Selection) boo
 }
 
 // admitsConversion reports whether a conversion of a value of operand type
-// to iface, performed by instr in fn, counts as evidence. A consumer can put
-// an API type behind any interface, its own included, and can hold anything
-// behind an API interface, so either end being on the API admits it.
+// to iface, performed by instr in fn, counts as evidence: to an interface
+// from a concrete type or from another interface alike. A test's conversion
+// stands in for a consumer's when a consumer could write it — both ends
+// are types it can name — and it is aimed at the API, an exported API type
+// at one end or the other. A consumer puts an API type behind any interface,
+// its own included, and puts its own types behind an API interface, but never
+// holds a production type the API does not export, so a test converting one
+// is test evidence still.
 func (v view) admitsConversion(fset *token.FileSet, fn *ssa.Function, instr ssa.Instruction, operand, iface types.Type) bool {
-	return v.admitsInstruction(fset, fn, instr) || v.consumerType(operand) || v.consumerType(iface)
+	if v.admitsInstruction(fset, fn, instr) {
+		return true
+	}
+	return (v.consumerType(operand) || v.consumerType(iface)) &&
+		v.consumerWritable(fset, operand) && v.consumerWritable(fset, iface)
+}
+
+// admitsInstances reports whether any instantiation site the view does not
+// admit can stand in for a consumer's.
+func (v view) admitsInstances() bool {
+	return v.consumers != nil && v.consumers.instantiations
+}
+
+// admitsInstance reports whether a test's instantiation site, written
+// in a file or package the view does not admit, stands in for a consumer's.
+// The instantiated generic has to be one a consumer reaches — an exported
+// generic of an API package, or an exported generic method selected through
+// an exported API type, promoted ones included, as [view.admitsSelection]
+// judges one — and every type argument one a consumer could write. A test
+// instantiating an API generic with a production type the API does not export
+// supplies an argument no consumer can.
+func (v view) admitsInstance(fset *token.FileSet, used types.Object, selection *types.Selection, args []types.Type) bool {
+	if !v.admitsInstances() {
+		return false
+	}
+	for _, arg := range args {
+		if !v.consumerWritable(fset, arg) {
+			return false
+		}
+	}
+	if fn, ok := used.(*types.Func); ok && fn.Signature().Recv() != nil {
+		return selection != nil && fn.Exported() && v.consumerType(selection.Recv())
+	}
+	return v.consumerObject(used)
 }
 
 // consumerObject reports whether obj is an exported package-level declaration
 // of an API package whose tests stand in for its consumers.
 func (v view) consumerObject(obj types.Object) bool {
-	return len(v.consumers) > 0 && obj.Exported() && obj.Pkg() != nil && v.consumers[obj.Pkg().Path()]
+	return v.consumers != nil && obj.Exported() && obj.Pkg() != nil && v.consumers.api[obj.Pkg().Path()]
 }
 
 // consumerType reports whether t, through a pointer, is an exported named type
 // of an API package whose tests stand in for its consumers.
 func (v view) consumerType(t types.Type) bool {
-	if len(v.consumers) == 0 {
+	if v.consumers == nil {
 		return false
 	}
 	t = types.Unalias(t)
@@ -98,14 +149,90 @@ func (v view) consumerType(t types.Type) bool {
 // interface over a public type has its call sites in the consumer, so
 // it confers the way a dependency's does.
 func (v view) consumerInterface(fset *token.FileSet, named *types.Named) bool {
-	if len(v.consumers) == 0 {
-		return false
-	}
-	obj := named.Obj()
+	return v.consumers != nil && v.testDeclared(fset, named.Obj())
+}
+
+// testDeclared reports whether obj is declared by test code: in a _test.go file
+// or a declared test-facing package.
+func (v view) testDeclared(fset *token.FileSet, obj types.Object) bool {
 	if obj.Pkg() != nil && v.testFacing[obj.Pkg().Path()] {
 		return true
 	}
 	return testFile(position(fset, obj.Pos()).Filename)
+}
+
+// consumerWritable reports whether a consumer could write t: every named type
+// it is built from is an exported type of an API package, a type test code
+// declares, or one declared outside the packages this run reports on, and none
+// is a type parameter, which only a generic body sees.
+func (v view) consumerWritable(fset *token.FileSet, t types.Type) bool {
+	if v.consumers == nil {
+		return false
+	}
+	t = types.Unalias(t)
+	switch t := t.(type) {
+	case *types.Basic:
+		return true
+	case *types.TypeParam:
+		return false
+	case *types.Named:
+		obj := t.Origin().Obj()
+		pkg := obj.Pkg()
+		writable := pkg == nil || !v.consumers.analyzed[pkg.Path()] || v.consumerObject(obj) ||
+			v.testDeclared(fset, obj)
+		return writable && v.allWritable(fset, slices.Collect(t.TypeArgs().Types()))
+	}
+	parts, ok := typeParts(t)
+	return ok && v.allWritable(fset, parts)
+}
+
+func (v view) allWritable(fset *token.FileSet, parts []types.Type) bool {
+	for _, t := range parts {
+		if !v.consumerWritable(fset, t) {
+			return false
+		}
+	}
+	return true
+}
+
+// typeParts returns the types an unnamed composite type is written from,
+// and false for a type that is not one.
+func typeParts(t types.Type) ([]types.Type, bool) {
+	switch t := t.(type) {
+	case *types.Pointer:
+		return []types.Type{t.Elem()}, true
+	case *types.Slice:
+		return []types.Type{t.Elem()}, true
+	case *types.Array:
+		return []types.Type{t.Elem()}, true
+	case *types.Chan:
+		return []types.Type{t.Elem()}, true
+	case *types.Map:
+		return []types.Type{t.Key(), t.Elem()}, true
+	case *types.Signature:
+		return slices.Concat(tupleTypes(t.Params()), tupleTypes(t.Results())), true
+	case *types.Struct:
+		parts := make([]types.Type, 0, t.NumFields())
+		for field := range t.Fields() {
+			parts = append(parts, field.Type())
+		}
+		return parts, true
+	case *types.Interface:
+		var parts []types.Type
+		for method := range t.ExplicitMethods() {
+			parts = append(parts, method.Type())
+		}
+		return append(parts, slices.Collect(t.EmbeddedTypes())...), true
+	}
+	return nil, false
+}
+
+func tupleTypes(tuple *types.Tuple) []types.Type {
+	parts := make([]types.Type, 0, tuple.Len())
+	for v := range tuple.Variables() {
+		parts = append(parts, v.Type())
+	}
+	return parts
 }
 
 // admitsFile reports whether facts read from the named file count as evidence.

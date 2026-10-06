@@ -29,7 +29,7 @@ func run() { consume(provide()) }
 `)
 		prog := buildSSA(pkgs)
 		inst := engine.NewInstantiations(pkgs)
-		refs := engine.NewMethodReferenceScan(pkgs, engine.NewFileFacts(pkgs), engine.NewEvidence(prog, inst))
+		refs := engine.NewMethodReferenceScan(pkgs, engine.NewFileFacts(pkgs), engine.NewEvidence(prog, inst), inst)
 		flows := engine.NewInterfaceFlows(prog, inst, refs)
 
 		fset := pkgs[0].Fset
@@ -54,7 +54,7 @@ func run() {
 `)
 		prog := buildSSA(pkgs)
 		inst := engine.NewInstantiations(pkgs)
-		refs := engine.NewMethodReferenceScan(pkgs, engine.NewFileFacts(pkgs), engine.NewEvidence(prog, inst))
+		refs := engine.NewMethodReferenceScan(pkgs, engine.NewFileFacts(pkgs), engine.NewEvidence(prog, inst), inst)
 		flows := engine.NewInterfaceFlows(prog, inst, refs)
 
 		Expect(flows.Used(engine.MethodKey(pkgs[0].Fset, interfaceMethod(pkgs[0], "Source", "Names")))).To(BeTrue())
@@ -78,7 +78,7 @@ func run() { _ = peek(nil) }
 `)
 		prog := buildSSA(pkgs)
 		inst := engine.NewInstantiations(pkgs)
-		refs := engine.NewMethodReferenceScan(pkgs, engine.NewFileFacts(pkgs), engine.NewEvidence(prog, inst))
+		refs := engine.NewMethodReferenceScan(pkgs, engine.NewFileFacts(pkgs), engine.NewEvidence(prog, inst), inst)
 		flows := engine.NewInterfaceFlows(prog, inst, refs)
 
 		fset := pkgs[0].Fset
@@ -107,7 +107,7 @@ func run() {
 		inst := engine.NewInstantiations(pkgs)
 		// The reference scan holds only the analyzed package, so dep.Sink sits
 		// outside it and nothing ever selects Flush.
-		refs := engine.NewMethodReferenceScan(pkgs[1:], engine.NewFileFacts(pkgs[1:]), engine.NewEvidence(prog, inst))
+		refs := engine.NewMethodReferenceScan(pkgs[1:], engine.NewFileFacts(pkgs[1:]), engine.NewEvidence(prog, inst), inst)
 		flows := engine.NewInterfaceFlows(prog, inst, refs)
 
 		Expect(flows.Used(engine.MethodKey(pkgs[1].Fset, interfaceMethod(pkgs[1], "Source", "Flush")))).To(BeTrue())

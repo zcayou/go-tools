@@ -42,3 +42,25 @@ func (f ListenerFunc) Listen() { listened() }
 func handled() {}
 
 func listened() {}
+
+// Sink is the writer NewSink hands out. Production never writes to one; only
+// the test does, through io.Writer, the way a consumer would hand it to fmt.
+type Sink interface {
+	Write(p []byte) (int, error)
+}
+
+// NewSink returns a Sink.
+func NewSink() Sink { return &buffer{} }
+
+type buffer struct{ written int }
+
+func (b *buffer) Write(p []byte) (int, error) {
+	b.written += len(p)
+	return len(p), nil
+}
+
+// Label is rendered only by the test, which hands one to fmt as any,
+// the way a consumer would print it.
+type Label string
+
+func (l Label) String() string { return string(l) }

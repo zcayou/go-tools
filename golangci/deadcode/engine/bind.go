@@ -32,7 +32,7 @@ type interfaceBindScan struct {
 }
 
 func newInterfaceBindScan(
-	prog *ssa.Program,
+	prog *program,
 	loaded []*packages.Package,
 	sealed *sealedSurface,
 	refs *methodReferenceScan,
@@ -69,7 +69,7 @@ func (s *interfaceBindScan) bound(key string) bool {
 // it shadows, and an embedded default is credited for the types that do not
 // override it.
 func (s *interfaceBindScan) creditConversion(
-	prog *ssa.Program,
+	prog *program,
 	confers func(iface types.Type, method *types.Func) bool,
 	concrete, iface types.Type,
 ) {
@@ -108,7 +108,7 @@ func (s *interfaceBindScan) creditAssertion(
 	asserted assertedType,
 ) {
 	if asserted.enclosing == nil {
-		s.creditAssertedInterface(refs, confers, ev, asserted.typ)
+		s.creditAssertedInterface(refs, confers, ev, inst, asserted.typ)
 		return
 	}
 	// An asserted type written against the enclosing generic's type parameters
@@ -124,7 +124,7 @@ func (s *interfaceBindScan) creditAssertion(
 		if !ok {
 			continue
 		}
-		s.creditAssertedInterface(refs, confers, ev, specialized)
+		s.creditAssertedInterface(refs, confers, ev, inst, specialized)
 	}
 }
 
@@ -132,6 +132,7 @@ func (s *interfaceBindScan) creditAssertedInterface(
 	refs *methodReferenceScan,
 	confers func(iface types.Type, method *types.Func) bool,
 	ev *evidence,
+	inst *instantiations,
 	iface types.Type,
 ) {
 	methods, ok := iface.Underlying().(*types.Interface)
@@ -143,7 +144,7 @@ func (s *interfaceBindScan) creditAssertedInterface(
 			continue
 		}
 		for _, implementation := range refs.concreteMethodsByName[method.Name()] {
-			if ev.materialized(implementation.fn) && implementsInterface(implementation.fn, methods) {
+			if ev.materialized(implementation.fn) && implementsAt(implementation.fn, methods, inst) {
 				s.credited[implementation.key] = true
 			}
 		}
@@ -417,7 +418,7 @@ func newSealedSurface(surface *apiSurface, inst *instantiations, loaded []*packa
 				}
 				method, ok := pkg.TypesInfo.Defs[funcDecl.Name].(*types.Func)
 				if !ok || !slices.ContainsFunc(byName[method.Name()], func(iface *types.Interface) bool {
-					return implementsSealed(method, iface, inst)
+					return implementsAt(method, iface, inst)
 				}) {
 					continue
 				}
@@ -430,40 +431,6 @@ func newSealedSurface(surface *apiSurface, inst *instantiations, loaded []*packa
 		}
 	}
 	return sealed
-}
-
-// implementsSealed reports whether method's receiver implements a sealed
-// interface the surface exposes. A generic receiver is weighed as written
-// and at each instantiation inst holds of it. As written it satisfies
-// an instantiated interface only while its methods' signatures leave its type
-// parameters out, and then every instantiation does; a method mentioning one —
-// compile() (Schema[T], error) — matches an instantiated interface only once
-// the receiver is instantiated too, and the instantiations the program builds
-// are the ones a consumer is known to hold. A receiver the program never
-// instantiates is credited only where the written form already satisfies.
-func implementsSealed(method *types.Func, iface *types.Interface, inst *instantiations) bool {
-	if implementsInterface(method, iface) {
-		return true
-	}
-	recv := method.Signature().Recv()
-	if recv == nil {
-		return false
-	}
-	named, ok := heldForm(recv.Type()).(*types.Named)
-	if !ok || named.TypeParams().Len() == 0 {
-		return false
-	}
-	for _, vector := range inst.vectors(named.Obj()) {
-		instance, err := types.Instantiate(nil, named, vector, false)
-		if err != nil {
-			continue
-		}
-		// The pointer's method set holds the value receiver's methods as well.
-		if types.Implements(types.NewPointer(instance), iface) {
-			return true
-		}
-	}
-	return false
 }
 
 // heldForm returns the type a consumer holds to invoke a method with the given

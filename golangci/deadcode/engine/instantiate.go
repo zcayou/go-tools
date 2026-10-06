@@ -90,23 +90,45 @@ type rawInstance struct {
 
 // newInstantiations reads TypesInfo.Instances from every loaded package,
 // dependencies included, and resolves parametric vectors transitively. Sites
-// in files the view does not admit contribute nothing, which masks
-// constraint-satisfaction credits, reflect.TypeFor closure seeds,
-// and instantiation-derived flow edges in one place.
+// in files the view does not admit contribute only what [view.admitsInstance]
+// takes as a consumer's, which masks constraint-satisfaction credits,
+// reflect.TypeFor closure seeds, instantiation-derived flow edges,
+// and the specializations of assertions in generic bodies in one place.
 func newInstantiations(loaded []*packages.Package, v view) *instantiations {
 	var raw []rawInstance
 	packages.Visit(loaded, nil, func(pkg *packages.Package) {
-		if pkg.TypesInfo == nil || !v.admitsPackage(pkg.PkgPath) {
+		if pkg.TypesInfo == nil {
 			return
 		}
+		var consumer func(*ast.Ident, types.Object, []types.Type) bool
 		for _, file := range pkg.Syntax {
-			if !v.admitsFile(position(pkg.Fset, file.Pos()).Filename) {
+			if v.admitsPackage(pkg.PkgPath) && v.admitsFile(position(pkg.Fset, file.Pos()).Filename) {
+				raw = append(raw, fileInstances(pkg, file, nil)...)
 				continue
 			}
-			raw = append(raw, fileInstances(pkg, file)...)
+			if !v.admitsInstances() {
+				continue
+			}
+			if consumer == nil {
+				selections := selectionsByName(pkg.TypesInfo)
+				consumer = func(ident *ast.Ident, used types.Object, args []types.Type) bool {
+					return v.admitsInstance(pkg.Fset, used, selections[ident], args)
+				}
+			}
+			raw = append(raw, fileInstances(pkg, file, consumer)...)
 		}
 	})
 	return resolveInstances(raw)
+}
+
+// selectionsByName indexes the package's selections by the identifier
+// they select, which is how an instantiation site names a generic method.
+func selectionsByName(info *types.Info) map[*ast.Ident]*types.Selection {
+	byName := make(map[*ast.Ident]*types.Selection, len(info.Selections))
+	for selector, selection := range info.Selections {
+		byName[selector.Sel] = selection
+	}
+	return byName
 }
 
 // vectors yields every fully concrete type-argument vector recorded
@@ -136,26 +158,36 @@ func (s *instantiations) all(yield func(obj types.Object, vectors [][]types.Type
 // be generic and a function literal has no type parameters of its own, so
 // a site's free parameters always belong to the declaration that holds it,
 // and genericContext picks which of that declaration's generics they are.
-func fileInstances(pkg *packages.Package, file *ast.File) []rawInstance {
+// A site keep refuses is left out; a nil keep keeps every site.
+func fileInstances(
+	pkg *packages.Package,
+	file *ast.File,
+	keep func(ident *ast.Ident, used types.Object, args []types.Type) bool,
+) []rawInstance {
 	var raw []rawInstance
 	for _, decl := range file.Decls {
 		switch decl := decl.(type) {
 		case *ast.FuncDecl:
-			raw = append(raw, nodeInstances(pkg, decl, funcContext(pkg, decl))...)
+			raw = append(raw, nodeInstances(pkg, decl, funcContext(pkg, decl), keep)...)
 		case *ast.GenDecl:
 			for _, spec := range decl.Specs {
 				var context genericContext
 				if typeSpec, ok := spec.(*ast.TypeSpec); ok {
 					context = typeSpecContext(pkg, typeSpec)
 				}
-				raw = append(raw, nodeInstances(pkg, spec, context)...)
+				raw = append(raw, nodeInstances(pkg, spec, context, keep)...)
 			}
 		}
 	}
 	return raw
 }
 
-func nodeInstances(pkg *packages.Package, node ast.Node, context genericContext) []rawInstance {
+func nodeInstances(
+	pkg *packages.Package,
+	node ast.Node,
+	context genericContext,
+	keep func(ident *ast.Ident, used types.Object, args []types.Type) bool,
+) []rawInstance {
 	var raw []rawInstance
 	ast.Inspect(node, func(n ast.Node) bool {
 		ident, ok := n.(*ast.Ident)
@@ -172,6 +204,9 @@ func nodeInstances(pkg *packages.Package, node ast.Node, context genericContext)
 			return true
 		}
 		site := rawInstance{obj: obj, args: slices.Concat(receiverTypeArgs(used), slices.Collect(instance.TypeArgs.Types()))}
+		if keep != nil && !keep(ident, used, site.args) {
+			return true
+		}
 		if slices.ContainsFunc(site.args, parametricType) {
 			site.enclosing = context.enclosing(site.args...)
 		}

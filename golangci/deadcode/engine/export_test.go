@@ -15,6 +15,17 @@ import (
 // through Analyze over whole-module fixtures, where the loaded program actually
 // carries test variants.
 
+// Program exposes program, the completed SSA program the engine reads.
+type Program = program
+
+// BuildProgram exposes buildProgram.
+var BuildProgram = buildProgram
+
+// Functions exposes the completed program's function set.
+func (p *program) Functions() map[*ssa.Function]bool {
+	return p.funcs
+}
+
 // NewInstantiations exposes newInstantiations.
 var NewInstantiations = func(loaded []*packages.Package) *instantiations {
 	return newInstantiations(loaded, view{})
@@ -32,7 +43,7 @@ func (s *instantiations) Vectors(obj types.Object) [][]types.Type {
 }
 
 // NewEvidence exposes newEvidence, with no declared surface to seal anything.
-var NewEvidence = func(prog *ssa.Program, inst *instantiations) *evidence {
+var NewEvidence = func(prog *program, inst *instantiations) *evidence {
 	return newEvidence(prog, inst, &sealedSurface{}, view{})
 }
 
@@ -73,12 +84,13 @@ var NewMethodReferenceScan = func(
 	pkgs []*packages.Package,
 	facts map[*packages.Package]fileFacts,
 	ev *evidence,
+	inst *instantiations,
 ) *methodReferenceScan {
-	return newMethodReferenceScan(pkgs, facts, ev, view{})
+	return newMethodReferenceScan(pkgs, facts, ev, inst, view{})
 }
 
 // NewInterfaceFlows exposes newInterfaceFlows.
-var NewInterfaceFlows = func(prog *ssa.Program, inst *instantiations, refs *methodReferenceScan) *interfaceFlows {
+var NewInterfaceFlows = func(prog *program, inst *instantiations, refs *methodReferenceScan) *interfaceFlows {
 	return newInterfaceFlows(prog, inst, refs, view{})
 }
 

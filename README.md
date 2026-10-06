@@ -154,6 +154,16 @@ and a copy of something the surface does not declare — a package it leaves out
 a dependency — are declarations of their own, since the copy is then how that
 declaration reaches consumers.
 
+A function cannot be aliased, so its copy is a forwarder: an exported function
+in an `api` package whose body is one call to another `api` package's function
+— returned, or made bare when there are no results — passing its own type
+parameters and parameters, each once and in order, with a signature identical
+to the callee's, constraints included. Like an alias it draws no verdict,
+`unreachable func` included, whatever name it gives, and a reference to it
+counts for the callee. A function that reorders its arguments, adds a
+statement, narrows a constraint, or forwards within its own package or off the
+surface is a declaration of its own.
+
 A sealed interface — one declaring an unexported method, so that no other
 package can implement it — is weighed against the declared surface. Nothing in
 the module converts a handle to it when the factory hands back the concrete
@@ -241,15 +251,21 @@ package cannot be declared both `api` and `test-facing`.
 consumers the run cannot see. Without it, `tests: true` sets them aside with
 every other test, so a public adapter only the tests exercise, or a seam only
 they call, draws the `test-only` family. With it, test evidence aimed at the
-declared surface counts in the masked view as production evidence would: a
-reference to an exported declaration of an `api` package, a selection of an
-exported method through an exported `api` type (promoted ones included), and a
-conversion with an exported `api` type at either end. An interface a test
-declares over a public type credits what is bound to it, the way a consumer's
-own interface would. Test evidence aimed anywhere else stays masked, so
-production code off the surface that only tests keep alive still draws the
-family, and an exported `api` declaration nothing references, tests included,
-is still reported. It requires `api` and `tests: true`.
+declared surface counts in the masked view as production evidence would, as
+far as a consumer could have written it: a reference to an exported declaration
+of an `api` package; a selection of an exported method through an exported
+`api` type (promoted ones included); a conversion, concrete-to-interface or
+interface-to-interface, with an exported `api` type at one end and nothing at
+either end a consumer cannot name; and, unless `api-generics: skip`, an
+instantiation of an `api` generic with type arguments a consumer can name. A
+consumer can name exported `api` types, its own types (a test's), and its
+dependencies' types, so a test handing an `api` function a production type the
+`api` does not export stays test evidence. An interface a test declares over a
+public type credits what is bound to it, the way a consumer's own interface
+would. Test evidence aimed anywhere else stays masked, so production code off
+the surface that only tests keep alive still draws the family, and an exported
+`api` declaration nothing references, tests included, is still reported. It
+requires `api` and `tests: true`.
 
 `vocabulary-names` credits a closed vocabulary's published name. A named type
 whose own package declares typed constants of it is a vocabulary, and a

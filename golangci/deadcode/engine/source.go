@@ -335,3 +335,37 @@ func implementsInterface(method *types.Func, iface *types.Interface) bool {
 	}
 	return false
 }
+
+// implementsAt reports whether method's receiver implements iface, weighing
+// a generic receiver as written and at each instantiation inst holds of it.
+// As written it satisfies an interface only while its methods' signatures leave
+// its type parameters out, and then every instantiation does; a method
+// mentioning one — compile() (Schema[T], error) — matches an instantiated
+// or a concrete interface only once the receiver is instantiated too,
+// and the instantiations the program builds are the ones it is known to hold.
+// A receiver the program never instantiates satisfies only where the written
+// form already does.
+func implementsAt(method *types.Func, iface *types.Interface, inst *instantiations) bool {
+	if implementsInterface(method, iface) {
+		return true
+	}
+	recv := method.Signature().Recv()
+	if recv == nil {
+		return false
+	}
+	named, ok := heldForm(recv.Type()).(*types.Named)
+	if !ok || named.TypeParams().Len() == 0 {
+		return false
+	}
+	for _, vector := range inst.vectors(named.Obj()) {
+		instance, err := types.Instantiate(nil, named, vector, false)
+		if err != nil {
+			continue
+		}
+		// The pointer's method set holds the value receiver's methods as well.
+		if types.Implements(types.NewPointer(instance), iface) {
+			return true
+		}
+	}
+	return false
+}

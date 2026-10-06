@@ -36,6 +36,7 @@ type methodReferenceScan struct {
 	// file's are as visible as any other.
 	generated map[string]bool
 	evidence  *evidence
+	inst      *instantiations
 }
 
 type concreteMethod struct {
@@ -92,6 +93,7 @@ func newMethodReferenceScan(
 	pkgs []*packages.Package,
 	facts map[*packages.Package]fileFacts,
 	ev *evidence,
+	inst *instantiations,
 	v view,
 ) *methodReferenceScan {
 	scan := &methodReferenceScan{
@@ -105,6 +107,7 @@ func newMethodReferenceScan(
 		blankSpans:            spanIndex{},
 		generated:             map[string]bool{},
 		evidence:              ev,
+		inst:                  inst,
 	}
 	for _, pkg := range pkgs {
 		maps.Copy(scan.generated, facts[pkg].generated)
@@ -199,7 +202,7 @@ func (s *methodReferenceScan) addDynamicDispatchUses(method *types.Func, pos tok
 		return
 	}
 	for _, impl := range s.concreteMethodsByName[method.Name()] {
-		if s.evidence.materialized(impl.fn) && implementsInterface(impl.fn, iface) {
+		if s.evidence.materialized(impl.fn) && implementsAt(impl.fn, iface, s.inst) {
 			s.dispatched[impl.key] = append(s.dispatched[impl.key], pos)
 		}
 	}

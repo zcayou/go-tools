@@ -65,6 +65,13 @@ var _ = Describe("Analyze", func() {
 				"main.go:36:16: unreachable func: ViaFunc.src",
 			}),
 
+		// The one conversion of a tracker to a Publisher sits in a method x/tools
+		// builds only after two rounds of building the methods of runtime types,
+		// so a program read before reachability ran would not hold it, and Publish
+		// would be reported though Publisher.Publish dispatches to it.
+		Entry("credits a bind in a body built only once the program is complete",
+			"lazybodies", []string(nil)),
+
 		// Holder and Carrier are boxed, and each mentions one more type only through
 		// a method reflection cannot call: Holder's generic Make returns a Box,
 		// and Carrier's unexported payload a Payload. Neither is materialized, so
@@ -628,29 +635,70 @@ var _ = Describe("Analyze", func() {
 					"api/api.go:22:23: test-only unreachable func: ObserverFunc.Observe",
 					"api/api.go:28:14: test-only unreachable func: Meter.Read",
 					"api/api.go:30:6: test-only unreachable func: meterHelper",
+					"api/api.go:66:16: test-only unreachable func: Label.String",
 					"internal/machine/machine.go:23:6: test-only unreachable func: Debug",
 					"internal/machine/machine.go:25:6: test-only unreachable func: debugHelper",
+					"internal/machine/machine.go:31:14: test-only unreachable func: Probe.Observe",
 					"api/api.go:20:6: test-only unused exported type: ObserverFunc",
 					"api/api.go:26:6: test-only unused exported type: Meter",
+					"api/api.go:53:6: test-only unused exported func: NewSink",
+					"api/api.go:64:6: test-only unused exported type: Label",
 					"internal/machine/machine.go:23:6: test-only unused exported func: Debug",
+					"internal/machine/machine.go:29:6: test-only unused exported type: Probe",
 					"api/api.go:8:2: test-only unused interface method: Registrar.Append",
+					"api/api.go:49:2: test-only unused interface method: Sink.Write",
+					"api/api.go:57:18: test-only unused reflection-live exported method: buffer.Write",
 					"internal/machine/machine.go:17:20: test-only unused reflection-live exported method: registrar.Append",
 					"api/api.go:22:23: test-only unused exported method: ObserverFunc.Observe",
 					"api/api.go:28:14: test-only unused exported method: Meter.Read",
+					"api/api.go:66:16: test-only unused exported method: Label.String",
+					"internal/machine/machine.go:31:14: test-only unused exported method: Probe.Observe",
 				})))
 			})
 
 			It("admits test evidence aimed at the api and no further", func(ctx SpecContext) {
-				// The test's references keep ObserverFunc and Meter alive, so their methods
-				// root; its conversion binds ObserverFunc to Observer; its selection
-				// of Registrar.Append makes the seam confer on registrar; and its own
-				// reader interface confers on Meter.Read the way a consumer's would. Debug
-				// is on no surface, and only the test reaches it.
+				// The test's references keep ObserverFunc and Meter alive, so their
+				// methods root; its conversion binds ObserverFunc to Observer; its
+				// selection of Registrar.Append makes the seam confer on registrar;
+				// its own reader interface confers on Meter.Read the way a consumer's
+				// would; and handing a Sink to fmt as an io.Writer carries fmt's use
+				// of Write back to Sink, as handing it a Label as any carries its use
+				// of String back to Label. Debug is on no surface, and no consumer can
+				// name Probe, so handing one to Notify stands in for nobody: only
+				// the test reaches either.
 				Expect(analyzeWith(ctx, "testconsumers", consumers(true))).To(Equal(slices.Concat(unreferenced, []string{
 					"internal/machine/machine.go:23:6: test-only unreachable func: Debug",
 					"internal/machine/machine.go:25:6: test-only unreachable func: debugHelper",
+					"internal/machine/machine.go:31:14: test-only unreachable func: Probe.Observe",
 					"internal/machine/machine.go:23:6: test-only unused exported func: Debug",
+					"internal/machine/machine.go:29:6: test-only unused exported type: Probe",
+					"internal/machine/machine.go:31:14: test-only unused exported method: Probe.Observe",
 				})))
+			})
+
+			It("weighs a test's binding through a generic assertion at the instantiations it writes", func(ctx SpecContext) {
+				// Bind asserts a stored Handle[int] to the test's getter. Handle as written
+				// matches no Get() int, so the credit takes weighing Handle at its
+				// instantiation, and the specialization takes the test's Bind[getter]
+				// counting as a consumer's. Slot is the same shape in production, silent
+				// either way.
+				Expect(analyzeWith(ctx, "genericassertion", engine.Config{
+					Tests: true, API: []string{"./api"}, APITestConsumers: true,
+				})).To(BeEmpty())
+				Expect(analyzeWith(ctx, "genericassertion", engine.Config{Tests: true, API: []string{"./api"}})).To(Equal([]string{
+					"api/api.go:10:6: test-only unused exported func: NewStore",
+					"api/api.go:26:6: test-only unused exported func: Put",
+					"api/api.go:37:6: test-only unused exported func: Total",
+					"api/api.go:22:20: test-only unused exported method: Handle.Get",
+				}))
+			})
+
+			It("lets no test's instantiation stand in for a consumer's under skip", func(ctx SpecContext) {
+				// skip declines the reading that a type argument a test supplies
+				// is a consumer's, so the test's Bind[getter] specializes nothing.
+				Expect(analyzeWith(ctx, "genericassertion", engine.Config{
+					Tests: true, API: []string{"./api"}, APITestConsumers: true, APIGenerics: engine.GenericRootingSkip,
+				})).To(ContainElement("api/api.go:22:20: test-only unused exported method: Handle.Get"))
 			})
 
 			DescribeTable("rejects the setting with nothing to stand in for",
@@ -700,6 +748,62 @@ var _ = Describe("Analyze", func() {
 					"facade/facade.go:11:2: test-only unused exported type: Box",
 					"facade/facade.go:16:2: test-only unused exported const: Off",
 				}))
+			})
+		})
+
+		Describe("a forwarding function", func() {
+			// facade originates nothing: each of its functions forwards to owner's
+			// of the same shape, and a forwarder is a second name for its callee
+			// the way an alias is for a type. main uses four of them, the test
+			// one more, and nothing uses Orphan.
+			forwarding := func(consumers bool) engine.Config {
+				return engine.Config{Tests: true, API: []string{"./owner", "./facade"}, APITestConsumers: consumers}
+			}
+
+			It("draws no verdict, and answers through its callee", func(ctx SpecContext) {
+				findings := analyzeWith(ctx, "forwarders", forwarding(false))
+
+				// Nothing names a forwarder in a verdict, unreachable included; what
+				// nothing references is reported once, at the callee, and what only
+				// the test reaches through facade is the callee's test-only verdict.
+				for _, forwarder := range []string{"Encode", "Wrap", "Forward", "Join", "Reset", "Orphan"} {
+					Expect(findings).NotTo(ContainElement(MatchRegexp(`^facade/facade\.go:\d+:\d+: .*: %s$`, forwarder)))
+				}
+				Expect(findings).To(ContainElements(
+					"owner/owner.go:25:6: unused exported func: Orphan",
+					"owner/owner.go:21:6: test-only unused exported func: Reset",
+				))
+				for _, callee := range []string{"Encode", "Wrap", "Pass", "Join"} {
+					Expect(findings).NotTo(ContainElement(MatchRegexp(`^owner/owner\.go:\d+:\d+: .*: %s$`, callee)))
+				}
+			})
+
+			It("lets a test's use of a forwarder count for its callee", func(ctx SpecContext) {
+				Expect(analyzeWith(ctx, "forwarders", forwarding(true))).
+					NotTo(ContainElement(MatchRegexp(`: Reset$`)))
+			})
+
+			It("judges a function that does more than forward as its own declaration", func(ctx SpecContext) {
+				// Swap reorders its arguments, Extra takes a second statement, Narrow
+				// narrows the constraint, Local forwards within its own package, and Hidden
+				// to a package the surface leaves out. Nothing references any of them, so
+				// each is reported where it is declared.
+				Expect(analyzeWith(ctx, "forwarders", forwarding(false))).To(ContainElements(
+					"facade/facade.go:24:6: unused exported func: Swap",
+					"facade/facade.go:27:6: unused exported func: Extra",
+					"facade/facade.go:33:6: unused exported func: Narrow",
+					"facade/facade.go:36:6: unused exported func: Local",
+					"facade/facade.go:41:6: unused exported func: Hidden",
+				))
+			})
+
+			It("is an ordinary function while no surface is declared", func(ctx SpecContext) {
+				// Without the surface there is no second name: facade's functions
+				// are judged by their own references, and owner's are used by them.
+				Expect(analyzeWith(ctx, "forwarders", engine.Config{Tests: true})).To(ContainElements(
+					"facade/facade.go:21:6: unused exported func: Orphan",
+					"facade/facade.go:19:6: test-only unused exported func: Reset",
+				))
 			})
 		})
 

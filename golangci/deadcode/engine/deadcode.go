@@ -11,7 +11,6 @@ import (
 
 	"golang.org/x/tools/go/packages"
 	"golang.org/x/tools/go/ssa"
-	"golang.org/x/tools/go/ssa/ssautil"
 )
 
 // loadMode is what the analysis needs of the loader. NeedDeps together
@@ -159,12 +158,15 @@ type Config struct {
 
 	// APITestConsumers counts the declared API packages' tests as stand-ins
 	// for their consumers in the masked view. Test-origin evidence aimed
-	// at the surface — a reference to an exported declaration of an API package,
-	// a selection of an exported method through an exported API type, a conversion
-	// with an exported API type at either end — is admitted there as production
-	// evidence would be, while test evidence aimed anywhere else stays masked.
-	// A contract test code declares then confers the way a dependency's does,
-	// standing in for a consumer's own interface over a public type. Requires API
+	// at the surface, as far as a consumer could have written it, is admitted
+	// there as production evidence would be: a reference to an exported
+	// declaration of an API package, a selection of an exported method through
+	// an exported API type, a conversion with an exported API type at one end
+	// and only types a consumer can name at both, and, unless APIGenerics
+	// is [GenericRootingSkip], an instantiation of an API generic with such type
+	// arguments. Test evidence aimed anywhere else stays masked. A contract test
+	// code declares then confers the way a dependency's does, standing
+	// in for a consumer's own interface over a public type. Requires API
 	// and Tests.
 	APITestConsumers bool
 
@@ -274,14 +276,17 @@ func Analyze(ctx context.Context, cfg Config) ([]Finding, error) {
 	whole := newInstantiations(pkgs, view{})
 	sealed := newSealedSurface(surface, whole, pkgs)
 	vocab := newVocabulary(pkgs, cfg.VocabularyNames)
+	copies := newReexports(pkgs, facts, surface)
 
-	prog, ssaPkgs := ssautil.Packages(pkgs, ssa.InstantiateGenerics)
-	prog.Build()
+	prog, ssaPkgs, err := buildProgram(pkgs)
+	if err != nil {
+		return nil, err
+	}
 	if err = canceled(ctx, "building ssa"); err != nil {
 		return nil, err
 	}
 
-	full, err := evaluate(ctx, prog, ssaPkgs, pkgs, surface, facts, methodDecls, whole, sealed, vocab, cfg.Tests, view{})
+	full, err := evaluate(ctx, prog, ssaPkgs, pkgs, surface, facts, methodDecls, copies, whole, sealed, vocab, cfg.Tests, view{})
 	if err != nil {
 		return nil, err
 	}
@@ -298,9 +303,13 @@ func Analyze(ctx context.Context, cfg Config) ([]Finding, error) {
 	// a program whose only entry points are tests has nothing to root at once they
 	// are set aside, and [ErrNoRoots] holds that reachability is then undefined
 	// rather than empty — an empty family would read as all clear.
-	var consumers map[string]bool
+	var consumers *testConsumers
 	if cfg.APITestConsumers {
-		consumers = surface.packages
+		consumers = &testConsumers{
+			api:            surface.packages,
+			analyzed:       analyzedPackages(pkgs),
+			instantiations: surface.rootsInstantiations(),
+		}
 	}
 	mask := maskedView(pkgs, declared.packages, consumers)
 	maskedInst := newInstantiations(pkgs, mask)
@@ -309,7 +318,7 @@ func Analyze(ctx context.Context, cfg Config) ([]Finding, error) {
 	if !surface.rootsInstantiations() {
 		sealed = newSealedSurface(surface, maskedInst, pkgs)
 	}
-	masked, err := evaluate(ctx, prog, ssaPkgs, pkgs, surface, facts, methodDecls, maskedInst, sealed, vocab, false, mask)
+	masked, err := evaluate(ctx, prog, ssaPkgs, pkgs, surface, facts, methodDecls, copies, maskedInst, sealed, vocab, false, mask)
 	if err != nil {
 		return nil, fmt.Errorf("analyzing test-only liveness: %w", err)
 	}
@@ -358,12 +367,13 @@ func loadProgram(ctx context.Context, cfg Config, dir string, load *packages.Con
 // and vocab the published names it credits.
 func evaluate(
 	ctx context.Context,
-	prog *ssa.Program,
+	prog *program,
 	ssaPkgs []*ssa.Package,
 	pkgs []*packages.Package,
 	surface *apiSurface,
 	facts map[*packages.Package]fileFacts,
 	methodDecls *methodScan,
+	copies reexports,
 	inst *instantiations,
 	sealed *sealedSurface,
 	vocab *vocabulary,
@@ -372,7 +382,7 @@ func evaluate(
 ) ([]declaration, error) {
 	// The reference scans run first: whether a type is referenced decides both
 	// which API methods stay exempt and which of them are worth rooting.
-	idents := unusedExportedIdents(pkgs, facts, surface, v)
+	idents := unusedExportedIdents(pkgs, facts, copies, v)
 	deadTypes := unreferencedTypes(idents, surface)
 
 	// Whether the program can hold a type behind an interface is evidence every
@@ -380,7 +390,7 @@ func evaluate(
 	// from reflect.TypeFor's resolved type arguments and from what the sealed
 	// surface holds as well as from conversions — and shared.
 	ev := newEvidence(prog, inst, sealed, v)
-	methodRefs := newMethodReferenceScan(pkgs, facts, ev, v)
+	methodRefs := newMethodReferenceScan(pkgs, facts, ev, inst, v)
 	flows := newInterfaceFlows(prog, inst, methodRefs, v)
 	binds := newInterfaceBindScan(prog, pkgs, sealed, methodRefs, analyzedPackages(pkgs), ev, inst, flows, v)
 	if err := canceled(ctx, "scanning interface binds"); err != nil {
@@ -407,15 +417,21 @@ func evaluate(
 
 	var found []declaration
 	for _, decl := range slices.Concat(funcs, idents, interfaceMethods, reflectionMethods, methods) {
-		if surface.exempted(decl, deadTypes) {
+		if surface.exempted(decl, deadTypes) || copies.copies(declKey(decl.pos)) {
 			continue
 		}
 		found = append(found, decl)
 	}
 	// The unmeasured verdict reports the analysis, not the declaration, so no
 	// exemption applies to it: an exempt kind is where a gap in coverage matters
-	// most, because nothing else would ever mention that declaration again.
-	found = append(found, unmeasured...)
+	// most, because nothing else would ever mention that declaration again. A copy
+	// is not a declaration at all, so it draws none: the walk past it reaches
+	// the original, which answers for itself.
+	for _, decl := range unmeasured {
+		if !copies.copies(declKey(decl.pos)) {
+			found = append(found, decl)
+		}
+	}
 	return found, nil
 }
 

@@ -66,13 +66,16 @@ type Settings struct {
 
 	// APITestConsumers counts the api packages' tests as stand-ins for their
 	// consumers, which this run cannot see. In the test-only family's masked view,
-	// test evidence aimed at the declared surface — a reference to an exported
-	// declaration of an api package, a selection of an exported method through
-	// an exported api type, a conversion with an exported api type at either end —
-	// counts as production evidence would, and an interface a test declares
-	// confers the way a consumer's own would. Test evidence aimed anywhere else
-	// stays masked, so production code off the surface that only tests keep alive
-	// still draws the family. Requires api and tests.
+	// test evidence aimed at the declared surface counts as production evidence
+	// would, as far as a consumer could have written it: a reference
+	// to an exported declaration of an api package, a selection of an exported
+	// method through an exported api type, a conversion with an exported api type
+	// at one end and only types a consumer can name at both, and, unless
+	// api-generics is skip, an instantiation of an api generic with such type
+	// arguments. An interface a test declares confers the way a consumer's own
+	// would. Test evidence aimed anywhere else stays masked, so production code
+	// off the surface that only tests keep alive still draws the family. Requires
+	// api and tests.
 	APITestConsumers bool `json:"api-test-consumers"`
 
 	// VocabularyNames credits each closed vocabulary's published name. A named
