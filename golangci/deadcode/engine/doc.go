@@ -85,6 +85,14 @@
 // is which of its own methods become runtime types, so a method a test type
 // alone selects is credited where the default would have reported it.
 //
+// The surface's generics are what a consumer holding it can call: its exported
+// generic functions, and the generic methods in the method sets of its exported
+// types still referenced. A method promoted through an embedded field
+// is in that set exactly as a declared one is, so an exported handle embedding
+// an unexported type that declares the generic operations roots them,
+// and the type declaring them being unexported says nothing about who calls
+// them.
+//
 // A generic the program never instantiates has no monomorphized body to root
 // at all. Its origin body still exists, and the calls it makes to concrete
 // functions are the same calls whatever a consumer instantiates it with, so
@@ -108,21 +116,23 @@
 // Describe("...", func() { ... }) uses everything it names.
 //
 // A re-export on the declared surface is judged as the declaration it renames.
-// An exported alias of another surface package's type, instantiated or not,
-// and an exported constant whose value is another surface package's constant
-// of the same type add a name rather than a declaration, and the name
-// is for consumers: a module reaches its own vocabulary through the package
-// that owns it, so judged by its own references every such copy reads
-// as unused, and the ones that pass do so because some caller happened to spell
-// them. The copy therefore draws no verdict. A reference to it counts
-// for the declaration at the end of its chain of copies, admitted by the view
-// like any other reference, and its right-hand side is part
-// of that declaration's own extent: defining a second name is not a use
-// of the first, and counting it as one would let a dead declaration hide behind
-// any copy of it. A conversion is a constant of its own and a second name
-// within one package a declaration of its own, and so is a copy of anything
-// the surface does not declare — a package it leaves out, or a dependency —
-// because the copy is then how that declaration reaches consumers at all.
+// An alias roots nothing its target would not, so a dead type stays dead behind
+// any alias of it, its methods unrooted with it. An exported alias of another
+// surface package's type, instantiated or not, and an exported constant whose
+// value is another surface package's constant of the same type add a name
+// rather than a declaration, and the name is for consumers: a module reaches
+// its own vocabulary through the package that owns it, so judged by its own
+// references every such copy reads as unused, and the ones that pass do so
+// because some caller happened to spell them. The copy therefore draws no
+// verdict. A reference to it counts for the declaration at the end of its chain
+// of copies, admitted by the view like any other reference, and its right-hand
+// side is part of that declaration's own extent: defining a second name is not
+// a use of the first, and counting it as one would let a dead declaration hide
+// behind any copy of it. A conversion is a constant of its own and a second
+// name within one package a declaration of its own, and so is a copy
+// of anything the surface does not declare — a package it leaves out,
+// or a dependency — because the copy is then how that declaration reaches
+// consumers at all.
 //
 // # Interface participation
 //
@@ -167,12 +177,17 @@
 // than to shield one. A generic sealed interface contributes the instantiations
 // the program builds of it, since a parameterized interface is a shape no
 // concrete method set matches, and one the program never instantiates
-// contributes nothing. Under [GenericRootingInstantiated] the instantiations
+// contributes nothing. A generic implementation is weighed the same way:
+// as written where its methods leave its parameters out, so that every
+// instantiation of it satisfies, and otherwise at the instantiations
+// the program builds of it — a method returning a type over the receiver's
+// parameter matches an instantiated contract only once the receiver
+// is instantiated too. Under [GenericRootingInstantiated] the instantiations
 // are the whole program's, test files included, in both views: which type
 // argument a consumer picks says nothing about who holds the interface,
 // the reading instantiated rooting takes of the surface's own generics. Under
-// [GenericRootingSkip] no test's instantiation stands in for a consumer's,
-// so the masked view weighs the contract against its own.
+// [GenericRootingSkip] no test's instantiation stands in for a consumer's, so
+// the masked view weighs the contract against its own.
 //
 // What the credit stands in for is materialization as well. A consumer holding
 // a sealed interface holds an implementation behind it, so each implementation
@@ -254,7 +269,9 @@
 // an uninstantiated generic on the declared surface is: its concrete callees
 // rooted, and [VerdictUnmeasuredGeneric] drawn where the walk meets a call
 // it cannot follow, unexported as the method may be. Under the masked view
-// a credited method declared in a test file roots nothing.
+// a credited method declared in a test file roots nothing. A method declaring
+// type parameters of its own satisfies no interface, so no bind credits one
+// and none takes a root this way.
 //
 // Interface-method liveness propagates across interface-to-interface flows.
 // When interface A flows into interface B — a conversion, which identical
@@ -290,6 +307,18 @@
 // a test file draws every verdict its declarations earn, which is what pairs
 // a dead contract with the implementations satisfying it.
 //
+// # Published vocabulary names
+//
+// [Config.VocabularyNames] credits a closed vocabulary's name: a String()
+// string method on a value receiver, on a named type whose own package declares
+// typed constants of it, constants in test files aside. The credit
+// is participation, read by every method verdict, and the name is a root, so
+// what rendering a member calls is live with it. It is a declaration's fact
+// rather than evidence, and holds in both views. Publishing a name per member
+// is a repository's API decision — a vocabulary production compares and never
+// renders keeps its name — so the credit is a setting, and reaches nothing else
+// on the type.
+//
 // # The analyzed set is an input, not just a filter
 //
 // Because participation is weighed against whether the interface's own liveness
@@ -315,13 +344,19 @@
 // materializations, flow edges — together with the roots that exist only
 // because of tests: the synthesized test mains and the test entry points,
 // excluded by package identity because the in-package test variant shares
-// the plain package's import path. A production declaration then lands
-// in exactly one bucket: live in both views, and silent; reported in the full
-// view, and reported exactly as a single evaluation would; or reported only
-// under the mask, which surfaces its masked verdicts in their test-only form —
-// test code is the only thing keeping it alive. Declarations in test
-// and generated files are judged in the full view alone, and the API surface
-// exempts in both views before the diff.
+// the plain package's import path. A fact SSA positions nowhere — an implicit
+// conversion in a package initializer, which has no position of its own either
+// — is placed by its package, and a test variant's initializer is test code:
+// a _test.go file's package-level var _ = boxing its entries into ...any
+// is masked like the same boxing inside a test function, while the production
+// initializers the in-package variant also runs count through the plain
+// package's own. A production declaration then lands in exactly one bucket:
+// live in both views, and silent; reported in the full view, and reported
+// exactly as a single evaluation would; or reported only under the mask, which
+// surfaces its masked verdicts in their test-only form — test code is the only
+// thing keeping it alive. Declarations in test and generated files are judged
+// in the full view alone, and the API surface exempts in both views before
+// the diff.
 //
 // Two readings of the program stand in for consumers rather than weigh
 // evidence, and the mask leaves them alone: the sealed surface, whose
@@ -332,6 +367,22 @@
 // are usually the only code in view instantiating its generics, and refusing
 // them would leave the surface unmeasured in exactly the view the question
 // is asked in; [GenericRootingSkip] is how a run declines that.
+//
+// A declared API package's tests are set aside with the rest, though
+// for a library they are often the only stand-ins for consumers in view.
+// [Config.APITestConsumers] counts them as such. Test-origin evidence aimed
+// at the declared surface — a reference to an exported declaration of an API
+// package, a selection of an exported method through an exported API type,
+// whatever type declares it, a conversion with an exported API type at either
+// end — is then admitted under the mask, so it decides which types are dead,
+// which methods root, and whether an API contract confers, exactly
+// as production evidence does. Filtering verdicts instead would decide none
+// of those. A contract test code declares confers unconditionally under it,
+// standing in for a consumer's own interface over a public type, whose call
+// sites no load can see. Test evidence aimed anywhere else stays masked:
+// a production declaration off the surface that only tests keep alive still
+// draws the family, and an API declaration nothing references, tests included,
+// is still reported.
 //
 // Some test code cannot be spelled as test code: a test plugin looks, feels,
 // and compiles exactly like a production plugin, and only who consumes it makes

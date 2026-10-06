@@ -43,14 +43,17 @@ func newInterfaceBindScan(
 	v view,
 ) *interfaceBindScan {
 	scan := &interfaceBindScan{credited: map[string]bool{}}
+	confers := func(iface types.Type, method *types.Func) bool {
+		return confersUse(prog.Fset, refs, flows, analyzed, v, iface, method)
+	}
 
 	for operand, iface := range ev.conversions {
-		scan.creditConversion(prog, refs, flows, analyzed, operand, iface)
+		scan.creditConversion(prog, confers, operand, iface)
 	}
 	for _, asserted := range assertedInterfaces(loaded, v) {
-		scan.creditAssertion(prog.Fset, refs, flows, analyzed, ev, inst, asserted)
+		scan.creditAssertion(refs, confers, ev, inst, asserted)
 	}
-	scan.creditInstantiations(prog.Fset, refs, flows, analyzed, inst)
+	scan.creditInstantiations(prog.Fset, confers, inst)
 	scan.creditSealedSurface(sealed)
 
 	return scan
@@ -67,9 +70,7 @@ func (s *interfaceBindScan) bound(key string) bool {
 // override it.
 func (s *interfaceBindScan) creditConversion(
 	prog *ssa.Program,
-	refs *methodReferenceScan,
-	flows *interfaceFlows,
-	analyzed map[string]bool,
+	confers func(iface types.Type, method *types.Func) bool,
 	concrete, iface types.Type,
 ) {
 	methods, ok := iface.Underlying().(*types.Interface)
@@ -78,7 +79,7 @@ func (s *interfaceBindScan) creditConversion(
 	}
 	set := prog.MethodSets.MethodSet(concrete)
 	for method := range methods.Methods() {
-		if !confersUse(prog.Fset, refs, flows, analyzed, iface, method) {
+		if !confers(iface, method) {
 			continue
 		}
 		if implementation := resolveMethod(set, method); implementation != nil {
@@ -100,16 +101,14 @@ func (s *interfaceBindScan) creditConversion(
 // pattern, and an entry in a test or generated file is harmless because no
 // verdict names it.
 func (s *interfaceBindScan) creditAssertion(
-	fset *token.FileSet,
 	refs *methodReferenceScan,
-	flows *interfaceFlows,
-	analyzed map[string]bool,
+	confers func(iface types.Type, method *types.Func) bool,
 	ev *evidence,
 	inst *instantiations,
 	asserted assertedType,
 ) {
 	if asserted.enclosing == nil {
-		s.creditAssertedInterface(fset, refs, flows, analyzed, ev, asserted.typ)
+		s.creditAssertedInterface(refs, confers, ev, asserted.typ)
 		return
 	}
 	// An asserted type written against the enclosing generic's type parameters
@@ -125,15 +124,13 @@ func (s *interfaceBindScan) creditAssertion(
 		if !ok {
 			continue
 		}
-		s.creditAssertedInterface(fset, refs, flows, analyzed, ev, specialized)
+		s.creditAssertedInterface(refs, confers, ev, specialized)
 	}
 }
 
 func (s *interfaceBindScan) creditAssertedInterface(
-	fset *token.FileSet,
 	refs *methodReferenceScan,
-	flows *interfaceFlows,
-	analyzed map[string]bool,
+	confers func(iface types.Type, method *types.Func) bool,
 	ev *evidence,
 	iface types.Type,
 ) {
@@ -142,7 +139,7 @@ func (s *interfaceBindScan) creditAssertedInterface(
 		return
 	}
 	for method := range methods.Methods() {
-		if !confersUse(fset, refs, flows, analyzed, iface, method) {
+		if !confers(iface, method) {
 			continue
 		}
 		for _, implementation := range refs.concreteMethodsByName[method.Name()] {
@@ -164,9 +161,7 @@ func (s *interfaceBindScan) creditAssertedInterface(
 // as the parametric form no concrete method could match.
 func (s *interfaceBindScan) creditInstantiations(
 	fset *token.FileSet,
-	refs *methodReferenceScan,
-	flows *interfaceFlows,
-	analyzed map[string]bool,
+	confers func(iface types.Type, method *types.Func) bool,
 	inst *instantiations,
 ) {
 	for obj, vectors := range inst.all {
@@ -180,7 +175,7 @@ func (s *interfaceBindScan) creditInstantiations(
 			}
 			env := environment(params, vector)
 			for i, argument := range vector {
-				s.creditConstraint(fset, refs, flows, analyzed, argument, params[i].Constraint(), env)
+				s.creditConstraint(fset, confers, argument, params[i].Constraint(), env)
 			}
 		}
 	}
@@ -194,9 +189,7 @@ func (s *interfaceBindScan) creditInstantiations(
 // is compared exactly as written.
 func (s *interfaceBindScan) creditConstraint(
 	fset *token.FileSet,
-	refs *methodReferenceScan,
-	flows *interfaceFlows,
-	analyzed map[string]bool,
+	confers func(iface types.Type, method *types.Func) bool,
 	argument, constraint types.Type,
 	env map[*types.TypeParam]types.Type,
 ) {
@@ -209,7 +202,7 @@ func (s *interfaceBindScan) creditConstraint(
 		sets = append(sets, types.NewMethodSet(types.NewPointer(argument)))
 	}
 	for method := range methods.Methods() {
-		if !confersUse(fset, refs, flows, analyzed, constraint, method) {
+		if !confers(constraint, method) {
 			continue
 		}
 		expected, ok := substituteSignature(method.Signature(), env)
@@ -424,7 +417,7 @@ func newSealedSurface(surface *apiSurface, inst *instantiations, loaded []*packa
 				}
 				method, ok := pkg.TypesInfo.Defs[funcDecl.Name].(*types.Func)
 				if !ok || !slices.ContainsFunc(byName[method.Name()], func(iface *types.Interface) bool {
-					return implementsInterface(method, iface)
+					return implementsSealed(method, iface, inst)
 				}) {
 					continue
 				}
@@ -437,6 +430,40 @@ func newSealedSurface(surface *apiSurface, inst *instantiations, loaded []*packa
 		}
 	}
 	return sealed
+}
+
+// implementsSealed reports whether method's receiver implements a sealed
+// interface the surface exposes. A generic receiver is weighed as written
+// and at each instantiation inst holds of it. As written it satisfies
+// an instantiated interface only while its methods' signatures leave its type
+// parameters out, and then every instantiation does; a method mentioning one —
+// compile() (Schema[T], error) — matches an instantiated interface only once
+// the receiver is instantiated too, and the instantiations the program builds
+// are the ones a consumer is known to hold. A receiver the program never
+// instantiates is credited only where the written form already satisfies.
+func implementsSealed(method *types.Func, iface *types.Interface, inst *instantiations) bool {
+	if implementsInterface(method, iface) {
+		return true
+	}
+	recv := method.Signature().Recv()
+	if recv == nil {
+		return false
+	}
+	named, ok := heldForm(recv.Type()).(*types.Named)
+	if !ok || named.TypeParams().Len() == 0 {
+		return false
+	}
+	for _, vector := range inst.vectors(named.Obj()) {
+		instance, err := types.Instantiate(nil, named, vector, false)
+		if err != nil {
+			continue
+		}
+		// The pointer's method set holds the value receiver's methods as well.
+		if types.Implements(types.NewPointer(instance), iface) {
+			return true
+		}
+	}
+	return false
 }
 
 // heldForm returns the type a consumer holds to invoke a method with the given
@@ -532,12 +559,15 @@ func sealedInterface(t types.Type) (*types.Interface, bool) {
 // a dependency's. The analysis loads those files and builds their bodies, so
 // every call site the contract has is one it can see, and the conditional rule
 // is the one that applies. Whether such a contract is reported is a separate
-// question, answered where the verdict is drawn.
+// question, answered where the verdict is drawn. The exception is a view
+// admitting API test consumers, where test code stands in for a consumer
+// and its contracts for a consumer's own, whose call sites no load can see.
 func confersUse(
 	fset *token.FileSet,
 	refs *methodReferenceScan,
 	flows *interfaceFlows,
 	analyzed map[string]bool,
+	v view,
 	iface types.Type,
 	method *types.Func,
 ) bool {
@@ -545,7 +575,7 @@ func confersUse(
 	// as its own node. Reading past it is what keeps an alias from turning
 	// the rule off.
 	named, ok := types.Unalias(iface).(*types.Named)
-	if !ok || named.Obj().Pkg() == nil || !analyzed[named.Obj().Pkg().Path()] {
+	if !ok || named.Obj().Pkg() == nil || !analyzed[named.Obj().Pkg().Path()] || v.consumerInterface(fset, named) {
 		return true
 	}
 	key := declKey(position(fset, method.Pos()))

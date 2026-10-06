@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -296,6 +297,26 @@ var _ = Describe("Analyze", func() {
 				"main.go:15:6: test-only unreachable func: describe",
 			}))
 		})
+
+		It("masks a conversion a test file's package-level initializer performs", func(ctx SpecContext) {
+			// SSA positions an implicit conversion nowhere, and a package initializer
+			// has no position either, so only the package can place what a test's
+			// var _ = renders: the in-package variant's initializer for Phase,
+			// the external test package's for Mode. Each is masked the way Level's
+			// rendering inside a test function is, and fmt's Stringer assertion then
+			// credits none of the three. Shown is rendered by production's own
+			// initializer, which the in-package variant runs as well, and stays live
+			// through the plain package's.
+			Expect(analyzeWith(ctx, "leak", engine.Config{Tests: true})).To(Equal([]string{
+				"lib/lib.go:16:16: test-only unreachable func: Phase.String",
+				"lib/lib.go:23:15: test-only unreachable func: Mode.String",
+				"lib/lib.go:30:16: test-only unreachable func: Level.String",
+				"lib/lib.go:12:2: test-only unused exported const: Start",
+				"lib/lib.go:16:16: test-only unused exported method: Phase.String",
+				"lib/lib.go:23:15: test-only unused exported method: Mode.String",
+				"lib/lib.go:30:16: test-only unused exported method: Level.String",
+			}))
+		})
 	})
 
 	Describe("a contract a test file declares", func() {
@@ -504,6 +525,47 @@ var _ = Describe("Analyze", func() {
 		Expect(findings[0].Name).To(Equal("Gauge.Read"))
 	})
 
+	Describe("published vocabulary names", func() {
+		// Production compares every member and renders none, so each String is dead
+		// on the program's evidence alone.
+		It("reports every String while the setting is off", func(ctx SpecContext) {
+			Expect(analyzeWith(ctx, "vocabularynames", engine.Config{})).To(Equal([]string{
+				"main.go:13:16: unreachable func: Phase.String",
+				"main.go:15:6: unreachable func: phaseNames",
+				"main.go:18:16: unreachable func: Phase.Terminal",
+				"main.go:23:16: unreachable func: Label.String",
+				"main.go:31:17: unreachable func: Level.String",
+				"main.go:13:16: unused exported method: Phase.String",
+				"main.go:18:16: unused exported method: Phase.Terminal",
+				"main.go:23:16: unused exported method: Label.String",
+				"main.go:31:17: unused exported method: Level.String",
+			}))
+		})
+
+		It("credits a vocabulary's published name and nothing else", func(ctx SpecContext) {
+			// Phase's String is its name, and it is a root, so phaseNames lives with it.
+			// Terminal is another method of the vocabulary, Label declares no member,
+			// and Level's String takes a pointer receiver: each is judged as ever.
+			Expect(analyzeWith(ctx, "vocabularynames", engine.Config{VocabularyNames: true})).To(Equal([]string{
+				"main.go:18:16: unreachable func: Phase.Terminal",
+				"main.go:23:16: unreachable func: Label.String",
+				"main.go:31:17: unreachable func: Level.String",
+				"main.go:18:16: unused exported method: Phase.Terminal",
+				"main.go:23:16: unused exported method: Label.String",
+				"main.go:31:17: unused exported method: Level.String",
+			}))
+		})
+
+		It("credits the name in the masked view too", func(ctx SpecContext) {
+			// Only tests render Phase, Mode and Level, wherever they are written.
+			// The name is a declaration's fact rather than test evidence, so the family
+			// loses them and keeps the constant only a test spells.
+			Expect(analyzeWith(ctx, "leak", engine.Config{Tests: true, VocabularyNames: true})).To(Equal([]string{
+				"lib/lib.go:12:2: test-only unused exported const: Start",
+			}))
+		})
+	})
+
 	Describe("the declared api surface", func() {
 		It("reports everything when nothing is declared", func(ctx SpecContext) {
 			Expect(analyzeFixture(ctx, "apisurface")).To(Equal([]string{
@@ -536,6 +598,73 @@ var _ = Describe("Analyze", func() {
 				"pkg/pkg.go:14:6: unused exported func: Emit",
 				"pkg/pkg.go:9:15: unused exported method: Widget.Spin",
 			}))
+		})
+
+		Describe("tests standing in for consumers", func() {
+			// api's consumers are outside the module, so its tests are their only
+			// stand-ins: an adapter only a test uses, a seam only a test selects,
+			// and a public type a test reads through an interface of its own. machine
+			// is production code on no declared surface. Nothing is exempt, so each
+			// verdict is evidence's alone.
+			consumers := func(on bool) engine.Config {
+				return engine.Config{Tests: true, API: []string{"./api", "./facade"}, APITestConsumers: on}
+			}
+			// The twins nothing references, tests included, draw the same verdicts
+			// either way: facade's alias of HandlerFunc roots nothing a dead HandlerFunc
+			// would not.
+			unreferenced := []string{
+				"api/api.go:36:22: unreachable func: HandlerFunc.Handle",
+				"api/api.go:40:23: unreachable func: ListenerFunc.Listen",
+				"api/api.go:42:6: unreachable func: handled",
+				"api/api.go:44:6: unreachable func: listened",
+				"api/api.go:34:6: unused exported type: HandlerFunc",
+				"api/api.go:38:6: unused exported type: ListenerFunc",
+				"api/api.go:36:22: unused exported method: HandlerFunc.Handle",
+				"api/api.go:40:23: unused exported method: ListenerFunc.Listen",
+			}
+
+			It("reports what only the api's tests use while they stand in for nothing", func(ctx SpecContext) {
+				Expect(analyzeWith(ctx, "testconsumers", consumers(false))).To(Equal(slices.Concat(unreferenced, []string{
+					"api/api.go:22:23: test-only unreachable func: ObserverFunc.Observe",
+					"api/api.go:28:14: test-only unreachable func: Meter.Read",
+					"api/api.go:30:6: test-only unreachable func: meterHelper",
+					"internal/machine/machine.go:23:6: test-only unreachable func: Debug",
+					"internal/machine/machine.go:25:6: test-only unreachable func: debugHelper",
+					"api/api.go:20:6: test-only unused exported type: ObserverFunc",
+					"api/api.go:26:6: test-only unused exported type: Meter",
+					"internal/machine/machine.go:23:6: test-only unused exported func: Debug",
+					"api/api.go:8:2: test-only unused interface method: Registrar.Append",
+					"internal/machine/machine.go:17:20: test-only unused reflection-live exported method: registrar.Append",
+					"api/api.go:22:23: test-only unused exported method: ObserverFunc.Observe",
+					"api/api.go:28:14: test-only unused exported method: Meter.Read",
+				})))
+			})
+
+			It("admits test evidence aimed at the api and no further", func(ctx SpecContext) {
+				// The test's references keep ObserverFunc and Meter alive, so their methods
+				// root; its conversion binds ObserverFunc to Observer; its selection
+				// of Registrar.Append makes the seam confer on registrar; and its own
+				// reader interface confers on Meter.Read the way a consumer's would. Debug
+				// is on no surface, and only the test reaches it.
+				Expect(analyzeWith(ctx, "testconsumers", consumers(true))).To(Equal(slices.Concat(unreferenced, []string{
+					"internal/machine/machine.go:23:6: test-only unreachable func: Debug",
+					"internal/machine/machine.go:25:6: test-only unreachable func: debugHelper",
+					"internal/machine/machine.go:23:6: test-only unused exported func: Debug",
+				})))
+			})
+
+			DescribeTable("rejects the setting with nothing to stand in for",
+				func(ctx SpecContext, cfg engine.Config) {
+					cfg.Dir = fixtureDir("testconsumers")
+					cfg.APITestConsumers = true
+
+					_, err := engine.Analyze(ctx, cfg)
+
+					Expect(err).To(MatchError(ContainSubstring("api test consumers require api patterns and tests")))
+				},
+				Entry("no api", engine.Config{Tests: true}),
+				Entry("no tests", engine.Config{API: []string{"./api"}}),
+			)
 		})
 
 		Describe("a re-export", func() {
@@ -656,6 +785,18 @@ var _ = Describe("Analyze", func() {
 					NotTo(ContainElement(ContainSubstring("Value.source")))
 			})
 
+			It("weighs a generic receiver at its instantiations when the contract mentions the parameter", func(ctx SpecContext) {
+				// Explicit.compile returns Compiled[I], which Explicit as written matches
+				// at no instantiation of SchemaFor; Explicit[int], which the test builds,
+				// matches SchemaFor[int]. Label.label leaves the parameter out, so Label
+				// as written already satisfies. Nothing instantiates Unbuilt, so it holds
+				// nothing a consumer is known to have, and its method is reported.
+				Expect(analyzeWith(ctx, "sealedparam", generic(engine.GenericRootingInstantiated))).To(Equal([]string{
+					"lib/lib.go:37:19: unreachable func: Unbuilt.compile",
+					"lib/lib.go:54:6: unreachable func: unbuiltHelper",
+				}))
+			})
+
 			It("lets no test's instantiation shape a sealed contract under skip", func(ctx SpecContext) {
 				// skip declines the reading altogether: in the masked view Source
 				// is instantiated nowhere, so Value.source is what only the test keeps
@@ -689,6 +830,20 @@ var _ = Describe("Analyze", func() {
 				// cannot follow, says so.
 				Expect(analyzeWith(ctx, "apigenericmethods", generic(engine.GenericRootingInstantiated))).To(Equal([]string{
 					"lib/lib.go:21:12: unmeasured generic: Set.Opaque",
+				}))
+			})
+
+			It("roots a generic method promoted onto an exported type", func(ctx SpecContext) {
+				// Caller declares none of the methods a consumer calls on it beyond Direct:
+				// the rest are promoted from the unexported access. Read off Caller's
+				// method set, Fetch roots through the test's instantiation and Rare
+				// is walked, the way each would be declared on Caller directly. Run
+				// is on no exported type's method set, so the test's instantiation
+				// of it stands in for no consumer and runHelper is what only the test keeps
+				// alive.
+				Expect(analyzeWith(ctx, "promotedgenerics", generic(engine.GenericRootingInstantiated))).To(Equal([]string{
+					"lib/lib.go:29:15: unmeasured generic: access.Opaque",
+					"lib/lib.go:52:6: test-only unreachable func: runHelper",
 				}))
 			})
 

@@ -36,8 +36,9 @@ type reachability struct {
 // analyzes. Functions a //go:linkname directive publishes are added either way
 // — the body runs under a name no source reference mentions, which is what
 // a root is — and so are the credited methods of what the sealed surface
-// holds, whose bodies run from a call RTA cannot see. Neither counts toward
-// having roots at all: a program with no entry point runs none of them.
+// holds, whose bodies run from a call RTA cannot see, and the published names
+// a vocabulary credits. None counts toward having roots at all: a program
+// with no entry point runs none of them.
 //
 // Under the masked view neither test-variant packages nor declared test-facing
 // packages contribute roots of any kind. The synthesized test main
@@ -52,6 +53,7 @@ func selectRoots(
 	initial []*packages.Package,
 	surface *apiSurface,
 	sealed *sealedSurface,
+	vocab *vocabulary,
 	deadTypes map[string]bool,
 	facts map[*packages.Package]fileFacts,
 	tests bool,
@@ -86,10 +88,11 @@ func selectRoots(
 	var unmeasured []declaration
 	var settled map[string]bool
 	if surface.rootsInstantiations() {
-		roots = append(roots, instantiatedRoots(prog, surface, deadTypes)...)
+		generics := surfaceGenerics(ssaPkgs, surface, deadTypes)
+		roots = append(roots, instantiatedRoots(prog, generics)...)
 		settled = instantiatedOrigins(prog)
 		var reached []*ssa.Function
-		reached, unmeasured = uninstantiatedRoots(prog, surfaceGenerics(prog, ssaPkgs, surface, deadTypes), settled)
+		reached, unmeasured = uninstantiatedRoots(prog, genericFuncs(prog, generics), settled)
 		roots = append(roots, reached...)
 	}
 	if len(roots) == 0 {
@@ -111,6 +114,7 @@ func selectRoots(
 	}
 	concrete, generic := creditedMethods(prog, sealed, participation, v)
 	roots = append(roots, concrete...)
+	roots = append(roots, publishedNames(prog, vocab, v)...)
 	if surface.rootsInstantiations() {
 		reached, more := uninstantiatedRoots(prog, generic, settled)
 		roots = append(roots, reached...)
@@ -166,7 +170,7 @@ func creditedMethods(
 		if !ok || named.TypeParams().Len() == 0 {
 			continue
 		}
-		for _, method := range declaredMethods(prog, named) {
+		for _, method := range genericFuncs(prog, slices.Collect(named.Methods())) {
 			if credited(method) {
 				generic = append(generic, method)
 			}
@@ -175,18 +179,18 @@ func creditedMethods(
 	return concrete, generic
 }
 
-// declaredMethods returns the functions of the methods declared on named, found
-// through their declarations: x/tools builds no method value
-// for a parameterized receiver or a generic method, so a method set yields
-// neither.
-func declaredMethods(prog *ssa.Program, named *types.Named) []*ssa.Function {
-	var methods []*ssa.Function
-	for method := range named.Methods() {
-		if fn := prog.FuncValue(method); fn != nil {
-			methods = append(methods, fn)
+// publishedNames returns the published names a vocabulary credits as roots.
+// The credit spares the name's own verdicts; rooting it keeps what rendering
+// a member calls live with it, rather than reporting that on exactly the claim
+// the name was spared. A name the view does not admit roots nothing.
+func publishedNames(prog *ssa.Program, vocab *vocabulary, v view) []*ssa.Function {
+	var roots []*ssa.Function
+	for _, method := range vocab.methods {
+		if fn := prog.FuncValue(method); fn != nil && v.admitsFunction(prog.Fset, fn) {
+			roots = append(roots, fn)
 		}
 	}
-	return methods
+	return roots
 }
 
 func packageFuncs(pkg *ssa.Package, names ...string) []*ssa.Function {
@@ -242,6 +246,7 @@ func unreachableFuncs(
 	initial []*packages.Package,
 	surface *apiSurface,
 	sealed *sealedSurface,
+	vocab *vocabulary,
 	deadTypes map[string]bool,
 	facts map[*packages.Package]fileFacts,
 	tests bool,
@@ -249,7 +254,7 @@ func unreachableFuncs(
 	participation func(key string) bool,
 ) ([]declaration, []declaration, reachability, error) {
 	roots, unmeasured, err := selectRoots(
-		prog, ssaPkgs, initial, surface, sealed, deadTypes, facts, tests, v, participation,
+		prog, ssaPkgs, initial, surface, sealed, vocab, deadTypes, facts, tests, v, participation,
 	)
 	if err != nil {
 		return nil, nil, reachability{}, err
@@ -359,13 +364,25 @@ func exportedRoots(prog *ssa.Program, pkg *ssa.Package, deadTypes map[string]boo
 		case *ssa.Type:
 			// A type no reference reaches keeps nothing alive: its methods are dead
 			// with it, so rooting them would hide their callees too.
-			if deadTypes[declKey(position(prog.Fset, member.Object().Pos()))] {
+			if deadType(prog.Fset, member, deadTypes) {
 				continue
 			}
 			roots = append(roots, exportedMethods(prog, member.Type())...)
 		}
 	}
 	return roots
+}
+
+// deadType reports whether a package's type member is one no reference reaches.
+// An alias is judged by the type it denotes: it is that type under a second
+// name, and rooting through it what a dead target would not root is how a dead
+// type would stay alive behind any alias of it.
+func deadType(fset *token.FileSet, member *ssa.Type, deadTypes map[string]bool) bool {
+	obj := member.Object()
+	if named, ok := types.Unalias(member.Type()).(*types.Named); ok {
+		obj = named.Origin().Obj()
+	}
+	return deadTypes[declKey(position(fset, obj.Pos()))]
 }
 
 func exportedRootPackage(path string) bool {
@@ -432,10 +449,11 @@ func reachableThroughCallGraph(roots []*ssa.Function, res *rta.Result, fset *tok
 }
 
 // instantiatedRoots returns the concrete instantiations the program builds
-// of a declared API package's exported generic surface. A generic declaration
-// cannot be a root itself — see exportedRoots — while every instantiation
-// the builder monomorphizes is an ordinary concrete function, so rooting those
-// is what makes the code beneath a generic API measurable.
+// of the declared API surface's generic declarations, as surfaceGenerics finds
+// them. A generic declaration cannot be a root itself — see exportedRoots —
+// while every instantiation the builder monomorphizes is an ordinary concrete
+// function, so rooting those is what makes the code beneath a generic API
+// measurable.
 //
 // Which type arguments the program supplies is not read as evidence about
 // the API. An instantiation's body calls the same declarations whichever
@@ -445,29 +463,20 @@ func reachableThroughCallGraph(roots []*ssa.Function, res *rta.Result, fset *tok
 // the files a view admits: for a library, the only code instantiating its
 // public generics is usually its own tests, and refusing those would leave
 // the surface unrooted in exactly the view the question is asked in.
-func instantiatedRoots(prog *ssa.Program, surface *apiSurface, deadTypes map[string]bool) []*ssa.Function {
+func instantiatedRoots(prog *ssa.Program, generics []*types.Func) []*ssa.Function {
+	surface := make(map[string]bool, len(generics))
+	for _, generic := range generics {
+		surface[declKey(position(prog.Fset, generic.Pos()))] = true
+	}
 	var roots []*ssa.Function
 	for fn := range ssautil.AllFunctions(prog) {
 		origin := fn.Origin()
 		if origin == nil || origin == fn || !concreteInstance(fn) {
 			continue
 		}
-		obj := origin.Object()
-		if obj == nil || !obj.Exported() {
-			continue
+		if surface[declKey(position(prog.Fset, origin.Pos()))] {
+			roots = append(roots, fn)
 		}
-		pkg := obj.Pkg()
-		if pkg == nil || !surface.packages[pkg.Path()] || !exportedRootPackage(pkg.Path()) {
-			continue
-		}
-		// A method is rooted on the same terms exportedRoots gives one: only while
-		// its receiver type is exported and still referenced.
-		if named := receiverOrigin(origin); named != nil {
-			if !named.Obj().Exported() || deadTypes[declKey(position(prog.Fset, named.Obj().Pos()))] {
-				continue
-			}
-		}
-		roots = append(roots, fn)
 	}
 	return roots
 }
@@ -625,31 +634,35 @@ func unmeasuredDeclaration(prog *ssa.Program, generic *ssa.Function) declaration
 	}
 }
 
-// surfaceGenerics returns the declarations exportedRoots had to skip across
+// surfaceGenerics returns the generic declarations a consumer reaches through
 // the declared surface: each surface package's exported generic functions,
-// and the exported generic methods of its exported named types.
-func surfaceGenerics(
-	prog *ssa.Program,
-	ssaPkgs []*ssa.Package,
-	surface *apiSurface,
-	deadTypes map[string]bool,
-) []*ssa.Function {
-	var found []*ssa.Function
+// and the exported generic methods in the method sets of its exported named
+// types that are still referenced — every method of a generic type,
+// and a method declaring type parameters of its own on any type. A package
+// and its test variant each contribute their own objects for one declaration,
+// which callers key by position.
+func surfaceGenerics(ssaPkgs []*ssa.Package, surface *apiSurface, deadTypes map[string]bool) []*types.Func {
+	var found []*types.Func
 	for _, pkg := range ssaPkgs {
 		if pkg == nil || !surface.packages[pkg.Pkg.Path()] || !exportedRootPackage(pkg.Pkg.Path()) {
 			continue
 		}
-		found = append(found, exportedGenerics(prog, pkg, deadTypes)...)
+		found = append(found, exportedGenerics(pkg, deadTypes)...)
 	}
 	return found
 }
 
-// exportedGenerics returns one package's exported generic functions,
-// and the exported generic methods of its exported named types: every method
-// of a generic type, and a method declaring type parameters of its own
-// on any type.
-func exportedGenerics(prog *ssa.Program, pkg *ssa.Package, deadTypes map[string]bool) []*ssa.Function {
-	var found []*ssa.Function
+// exportedGenerics returns one package's exported generic functions
+// and the exported generic methods its exported named types carry.
+//
+// The methods are read off the method sets rather than the declarations,
+// because a method promoted through an embedded field is as much a part
+// of the type a consumer holds as one declared on it: an exported type
+// embedding an unexported one that declares the generic methods offers those
+// methods to consumers, and nothing else does. A dead type contributes nothing,
+// on the terms exportedRoots gives its methods.
+func exportedGenerics(pkg *ssa.Package, deadTypes map[string]bool) []*types.Func {
+	var found []*types.Func
 	for name, member := range pkg.Members {
 		if !token.IsExported(name) {
 			continue
@@ -657,19 +670,52 @@ func exportedGenerics(prog *ssa.Program, pkg *ssa.Package, deadTypes map[string]
 		switch member := member.(type) {
 		case *ssa.Function:
 			if member.TypeParams().Len() > 0 {
-				found = append(found, member)
-			}
-		case *ssa.Type:
-			named, ok := member.Type().(*types.Named)
-			if !ok || deadTypes[declKey(position(prog.Fset, member.Object().Pos()))] {
-				continue
-			}
-			for _, method := range declaredMethods(prog, named) {
-				if token.IsExported(method.Name()) && method.TypeParams().Len() > 0 {
-					found = append(found, method)
+				if obj, ok := member.Object().(*types.Func); ok {
+					found = append(found, obj)
 				}
 			}
+		case *ssa.Type:
+			if deadType(pkg.Prog.Fset, member, deadTypes) {
+				continue
+			}
+			found = append(found, genericMethods(member.Type())...)
 		}
 	}
 	return found
+}
+
+// genericMethods returns the exported generic methods in the method sets
+// of a named type and its pointer, promoted ones included, each once.
+func genericMethods(named types.Type) []*types.Func {
+	var found []*types.Func
+	seen := map[*types.Func]bool{}
+	for _, form := range []types.Type{named, types.NewPointer(named)} {
+		for selection := range types.NewMethodSet(form).Methods() {
+			method, ok := selection.Obj().(*types.Func)
+			if !ok || !method.Exported() || seen[method.Origin()] {
+				continue
+			}
+			sig := method.Signature()
+			if sig.TypeParams().Len() == 0 && sig.RecvTypeParams().Len() == 0 {
+				continue
+			}
+			seen[method.Origin()] = true
+			found = append(found, method.Origin())
+		}
+	}
+	return found
+}
+
+// genericFuncs returns the functions behind generic declarations, found through
+// the declarations themselves: x/tools builds no method value
+// for a parameterized receiver or a generic method, so a method set yields
+// neither.
+func genericFuncs(prog *ssa.Program, generics []*types.Func) []*ssa.Function {
+	funcs := make([]*ssa.Function, 0, len(generics))
+	for _, generic := range generics {
+		if fn := prog.FuncValue(generic); fn != nil {
+			funcs = append(funcs, fn)
+		}
+	}
+	return funcs
 }

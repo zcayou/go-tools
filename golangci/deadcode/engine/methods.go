@@ -154,9 +154,6 @@ func (s *methodReferenceScan) addPackageDeclarations(pkg *packages.Package) {
 
 // addPackageUses records the method selections the view admits.
 func (s *methodReferenceScan) addPackageUses(pkg *packages.Package, v view) {
-	if !v.admitsPackage(pkg.PkgPath) {
-		return
-	}
 	fset := pkg.Fset
 	for selector, selection := range pkg.TypesInfo.Selections {
 		if selection.Kind() != types.MethodVal && selection.Kind() != types.MethodExpr {
@@ -167,7 +164,7 @@ func (s *methodReferenceScan) addPackageUses(pkg *packages.Package, v view) {
 			continue
 		}
 		pos := position(fset, selector.Sel.Pos())
-		if !v.admitsFile(pos.Filename) {
+		if !v.admitsSelection(pkg.PkgPath, pos.Filename, selection) {
 			continue
 		}
 		key := declKey(position(fset, obj.Pos()))

@@ -157,6 +157,26 @@ type Config struct {
 	// directly, which reports whatever a generic API alone reaches as unreachable.
 	APIGenerics GenericRooting
 
+	// APITestConsumers counts the declared API packages' tests as stand-ins
+	// for their consumers in the masked view. Test-origin evidence aimed
+	// at the surface — a reference to an exported declaration of an API package,
+	// a selection of an exported method through an exported API type, a conversion
+	// with an exported API type at either end — is admitted there as production
+	// evidence would be, while test evidence aimed anywhere else stays masked.
+	// A contract test code declares then confers the way a dependency's does,
+	// standing in for a consumer's own interface over a public type. Requires API
+	// and Tests.
+	APITestConsumers bool
+
+	// VocabularyNames credits each closed vocabulary's published name: a String()
+	// string method on a value receiver, on a named type whose own package
+	// declares typed constants of it, counts as used and is a root. It states
+	// a repository's convention — every vocabulary member has a name, whether
+	// or not production renders one — rather than evidence the program carries, so
+	// it is off by default. Other methods of such a type, and a String on a type
+	// no constant is declared of, are judged as ever.
+	VocabularyNames bool
+
 	// TestFacing are package patterns whose intended consumers are tests:
 	// production-shaped code that exists to be exercised by test files. They join
 	// the masked view's definition of test origin — their evidence and roots
@@ -211,6 +231,11 @@ func Analyze(ctx context.Context, cfg Config) ([]Finding, error) {
 	if err != nil {
 		return nil, err
 	}
+	if cfg.APITestConsumers && (len(surface.patterns) == 0 || !cfg.Tests) {
+		// The masked view is all the setting speaks to, and the surface is what
+		// it admits evidence toward: without either there is nothing to stand in for.
+		return nil, errors.New("api test consumers require api patterns and tests")
+	}
 
 	dir := cfg.Dir
 	if dir == "" {
@@ -248,6 +273,7 @@ func Analyze(ctx context.Context, cfg Config) ([]Finding, error) {
 	// holds the interface.
 	whole := newInstantiations(pkgs, view{})
 	sealed := newSealedSurface(surface, whole, pkgs)
+	vocab := newVocabulary(pkgs, cfg.VocabularyNames)
 
 	prog, ssaPkgs := ssautil.Packages(pkgs, ssa.InstantiateGenerics)
 	prog.Build()
@@ -255,7 +281,7 @@ func Analyze(ctx context.Context, cfg Config) ([]Finding, error) {
 		return nil, err
 	}
 
-	full, err := evaluate(ctx, prog, ssaPkgs, pkgs, surface, facts, methodDecls, whole, sealed, cfg.Tests, view{})
+	full, err := evaluate(ctx, prog, ssaPkgs, pkgs, surface, facts, methodDecls, whole, sealed, vocab, cfg.Tests, view{})
 	if err != nil {
 		return nil, err
 	}
@@ -272,14 +298,18 @@ func Analyze(ctx context.Context, cfg Config) ([]Finding, error) {
 	// a program whose only entry points are tests has nothing to root at once they
 	// are set aside, and [ErrNoRoots] holds that reachability is then undefined
 	// rather than empty — an empty family would read as all clear.
-	mask := view{masked: true, testFacing: declared.packages}
+	var consumers map[string]bool
+	if cfg.APITestConsumers {
+		consumers = surface.packages
+	}
+	mask := maskedView(pkgs, declared.packages, consumers)
 	maskedInst := newInstantiations(pkgs, mask)
 	// Under skip nothing a test instantiates stands in for a consumer, so
 	// the sealed surface's generic contracts are weighed against the view's own.
 	if !surface.rootsInstantiations() {
 		sealed = newSealedSurface(surface, maskedInst, pkgs)
 	}
-	masked, err := evaluate(ctx, prog, ssaPkgs, pkgs, surface, facts, methodDecls, maskedInst, sealed, false, mask)
+	masked, err := evaluate(ctx, prog, ssaPkgs, pkgs, surface, facts, methodDecls, maskedInst, sealed, vocab, false, mask)
 	if err != nil {
 		return nil, fmt.Errorf("analyzing test-only liveness: %w", err)
 	}
@@ -324,8 +354,8 @@ func loadProgram(ctx context.Context, cfg Config, dir string, load *packages.Con
 
 // evaluate runs every verdict pass over the built program under one evidence
 // view and returns the surface-filtered findings in report order. inst
-// is the instantiations the view admits, and sealed the sealed surface
-// it weighs.
+// is the instantiations the view admits, sealed the sealed surface it weighs,
+// and vocab the published names it credits.
 func evaluate(
 	ctx context.Context,
 	prog *ssa.Program,
@@ -336,6 +366,7 @@ func evaluate(
 	methodDecls *methodScan,
 	inst *instantiations,
 	sealed *sealedSurface,
+	vocab *vocabulary,
 	tests bool,
 	v view,
 ) ([]declaration, error) {
@@ -357,14 +388,15 @@ func evaluate(
 	}
 
 	// participation is the one answer every method verdict reads: a method covered
-	// by bind or dispatch evidence is reported by none of them, because each would
-	// be asserting the same claim against the same facts.
+	// by bind or dispatch evidence, or a published name, is reported by none
+	// of them, because each would be asserting the same claim against the same
+	// facts.
 	participation := func(key string) bool {
-		return binds.bound(key) || methodRefs.dispatchCredited(key)
+		return binds.bound(key) || methodRefs.dispatchCredited(key) || vocab.published(key)
 	}
 
 	funcs, unmeasured, reach, err := unreachableFuncs(
-		ctx, prog, ssaPkgs, pkgs, surface, sealed, deadTypes, facts, tests, v, participation,
+		ctx, prog, ssaPkgs, pkgs, surface, sealed, vocab, deadTypes, facts, tests, v, participation,
 	)
 	if err != nil {
 		return nil, err

@@ -257,9 +257,6 @@ func (s *identScan) renamed(key string) string {
 // addUses records every reference to an exported package-level declaration
 // that the view admits.
 func (s *identScan) addUses(pkg *packages.Package, v view) {
-	if !v.admitsPackage(pkg.PkgPath) {
-		return
-	}
 	fset := pkg.Fset
 
 	for ident, obj := range pkg.TypesInfo.Uses {
@@ -267,7 +264,7 @@ func (s *identScan) addUses(pkg *packages.Package, v view) {
 			continue
 		}
 		pos := position(fset, ident.Pos())
-		if !v.admitsFile(pos.Filename) {
+		if !v.admitsReference(pkg.PkgPath, pos.Filename, obj) {
 			continue
 		}
 		key := declKey(position(fset, obj.Pos()))

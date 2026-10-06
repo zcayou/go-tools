@@ -117,8 +117,10 @@ linters:
           build-tags: [integration]
           tests: true              # default; matches run.tests, and reports the test-only family
           api: ['./pkg/...']       # package patterns whose exported surface consumers reach
-          api-exempt: [method]     # default when api is set
+          api-exempt: [method]     # default when api is set; [] exempts nothing
           api-generics: instantiated  # default when api is set; skip roots none of it
+          api-test-consumers: true # api packages' tests stand in for their consumers
+          vocabulary-names: true   # a closed vocabulary's String is its published name
           test-facing: ['./plugins/test/...']  # packages whose intended consumers are tests
           roots: ['tools/*.go']    # entry-point files the load cannot reach
 ```
@@ -234,6 +236,29 @@ stops drawing the `test-only` family on its own surface (dead code inside it
 still reports with plain verdicts), while a production declaration only it
 keeps alive draws the family completely. It requires `tests: true`, and a
 package cannot be declared both `api` and `test-facing`.
+
+`api-test-consumers` counts an `api` package's tests as stand-ins for the
+consumers the run cannot see. Without it, `tests: true` sets them aside with
+every other test, so a public adapter only the tests exercise, or a seam only
+they call, draws the `test-only` family. With it, test evidence aimed at the
+declared surface counts in the masked view as production evidence would: a
+reference to an exported declaration of an `api` package, a selection of an
+exported method through an exported `api` type (promoted ones included), and a
+conversion with an exported `api` type at either end. An interface a test
+declares over a public type credits what is bound to it, the way a consumer's
+own interface would. Test evidence aimed anywhere else stays masked, so
+production code off the surface that only tests keep alive still draws the
+family, and an exported `api` declaration nothing references, tests included,
+is still reported. It requires `api` and `tests: true`.
+
+`vocabulary-names` credits a closed vocabulary's published name. A named type
+whose own package declares typed constants of it is a vocabulary, and a
+`String() string` method on a value receiver is its name: it counts as used,
+and what it calls stays live, whether or not production ever renders a member.
+That is a repository's convention — one name per member, rendered or not —
+rather than evidence the program carries, so it is off by default. Other
+methods of the type, and a `String` on a type with no declared constant, are
+judged as ever.
 
 `roots` names entry-point files the loader cannot reach: conventionally
 `package main` generators behind `//go:build ignore`, run with `go run`, where

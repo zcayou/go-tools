@@ -86,9 +86,21 @@
 // with go run; each is loaded as its own single-file program, contributing call
 // edges and references without ever being reported on.
 //
+// Including tests sets an api package's tests aside along with every other
+// test, though for a library they are often the only stand-ins for consumers
+// the run can see. api-test-consumers counts them as such: in the masked view,
+// test evidence aimed at the declared surface counts as production evidence
+// would, and test evidence aimed anywhere else stays masked.
+//
+// vocabulary-names states a convention instead: each closed vocabulary —
+// a named type its own package declares typed constants of — publishes a name
+// per member through a String method, used or not.
+//
 // An absent key and an empty list mean different things. Omitting patterns
 // analyzes the whole module; writing patterns: [] names no packages at all
-// and is rejected rather than quietly read as the default.
+// and is rejected rather than quietly read as the default. Omitting api-exempt
+// exempts method; writing api-exempt: [] exempts nothing, holding every
+// exported declaration of the surface to a reference.
 //
 // # Suppression
 //

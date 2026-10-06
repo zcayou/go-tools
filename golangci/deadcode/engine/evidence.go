@@ -82,7 +82,7 @@ func newEvidence(prog *ssa.Program, inst *instantiations, sealed *sealedSurface,
 		for _, block := range fn.Blocks {
 			for _, instr := range block.Instrs {
 				conversion, ok := instr.(*ssa.MakeInterface)
-				if !ok || !v.admitsInstruction(prog.Fset, fn, instr) {
+				if !ok || !v.admitsConversion(prog.Fset, fn, instr, conversion.X.Type(), conversion.Type()) {
 					continue
 				}
 				ev.addConversion(conversion.X.Type(), conversion.Type())

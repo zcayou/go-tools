@@ -51,8 +51,9 @@ type Settings struct {
 	API []string `json:"api"`
 
 	// APIExempt is the declaration kinds an API package exempts: func, method,
-	// type, const, var, or interface-method. Defaults to method when API is set.
-	// Requires API.
+	// type, const, var, or interface-method. Omit the key to exempt method;
+	// an explicitly empty list exempts nothing, which holds every exported
+	// declaration of the surface to a reference. Requires API.
 	APIExempt []string `json:"api-exempt"`
 
 	// APIGenerics is how the declared surface's generic declarations are rooted:
@@ -62,6 +63,26 @@ type Settings struct {
 	// and so reports whatever a generic API alone reaches as unreachable. Requires
 	// API.
 	APIGenerics *string `json:"api-generics"`
+
+	// APITestConsumers counts the api packages' tests as stand-ins for their
+	// consumers, which this run cannot see. In the test-only family's masked view,
+	// test evidence aimed at the declared surface — a reference to an exported
+	// declaration of an api package, a selection of an exported method through
+	// an exported api type, a conversion with an exported api type at either end —
+	// counts as production evidence would, and an interface a test declares
+	// confers the way a consumer's own would. Test evidence aimed anywhere else
+	// stays masked, so production code off the surface that only tests keep alive
+	// still draws the family. Requires api and tests.
+	APITestConsumers bool `json:"api-test-consumers"`
+
+	// VocabularyNames credits each closed vocabulary's published name. A named
+	// type whose own package declares typed constants of it is a vocabulary,
+	// and a String() string method on a value receiver is its name: it counts
+	// as used, and what it calls stays live, whether or not production ever
+	// renders a member. Other methods of the type, and a String on a type
+	// with no declared constant, are judged as ever. Off by default, because
+	// it states a convention rather than evidence the program carries.
+	VocabularyNames bool `json:"vocabulary-names"`
 
 	// TestFacing are package patterns whose intended consumers are tests:
 	// production-shaped code, a test plugin say, that exists to be exercised
@@ -170,30 +191,39 @@ func configFrom(s Settings) (engine.Config, error) {
 	if len(s.TestFacing) > 0 && !tests {
 		return engine.Config{}, errors.New("test-facing requires tests: the masked view is all it speaks to")
 	}
+	if s.APITestConsumers && len(s.API) == 0 {
+		return engine.Config{}, errors.New("api-test-consumers requires api")
+	}
+	if s.APITestConsumers && !tests {
+		return engine.Config{}, errors.New("api-test-consumers requires tests: the masked view is all it speaks to")
+	}
 
 	return engine.Config{
-		Patterns:    s.Patterns,
-		BuildTags:   s.BuildTags,
-		Tests:       tests,
-		API:         s.API,
-		APIExempt:   exempts,
-		APIGenerics: generics,
-		TestFacing:  s.TestFacing,
-		Roots:       s.Roots,
+		Patterns:         s.Patterns,
+		BuildTags:        s.BuildTags,
+		Tests:            tests,
+		API:              s.API,
+		APIExempt:        exempts,
+		APIGenerics:      generics,
+		APITestConsumers: s.APITestConsumers,
+		VocabularyNames:  s.VocabularyNames,
+		TestFacing:       s.TestFacing,
+		Roots:            s.Roots,
 	}, nil
 }
 
-// exemptions validates api-exempt and supplies the default. Exemptions without
-// api patterns are rejected rather than ignored: nothing would be exempt, so
-// the configuration does not mean what it says.
+// exemptions validates api-exempt and supplies the default. An absent key
+// takes the default and an explicitly empty list exempts nothing. Either list
+// without api patterns is rejected rather than ignored: there is no surface
+// for it to speak to, so the configuration does not mean what it says.
 func exemptions(s Settings) ([]engine.Kind, error) {
 	if len(s.API) == 0 {
-		if len(s.APIExempt) > 0 {
+		if s.APIExempt != nil {
 			return nil, errors.New("api-exempt requires api")
 		}
 		return nil, nil
 	}
-	if len(s.APIExempt) == 0 {
+	if s.APIExempt == nil {
 		return []engine.Kind{engine.KindMethod}, nil
 	}
 
