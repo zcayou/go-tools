@@ -171,6 +171,46 @@ var _ = Describe("Analyzer", func() {
 			Standalone: &testlayout.Category{Patterns: []string{"*_integration_test.go"}},
 		}, "standalonenames")
 	})
+
+	It("reports a spec file's fixture that another file consumes, and says where it belongs", func() {
+		runAnalysis(testlayout.Settings{}, "misplacedfixture")
+	})
+
+	It("takes no name for a fixture's where a scope declares it afresh, or where it keys a struct", func() {
+		runAnalysis(testlayout.Settings{}, "fixturescopes")
+	})
+
+	It("reports a helper file serving one file, crediting what it serves through other helpers", func() {
+		runAnalysis(testlayout.Settings{
+			Blackbox: &testlayout.Category{HelperPatterns: []string{"*_helpers_test.go"}},
+		}, "fixturehelpers")
+	})
+
+	It("counts a black-box file reaching into the white-box package, which cannot hold what it uses", func() {
+		runAnalysis(testlayout.Settings{
+			Whitebox: &testlayout.Category{
+				Allowed:        new(true),
+				Patterns:       []string{"<source>_internal_test.go"},
+				HelperPatterns: []string{"export_test.go"},
+			},
+		}, "fixtureboundary")
+	})
+
+	It("counts consumers under every build, not only the one the pass covers", func() {
+		runAnalysis(testlayout.Settings{}, "fixturebuilds")
+	})
+
+	It("says nothing about fixtures beside a test file that will not parse", func() {
+		runAnalysisPastSkippedPackage(testlayout.Settings{
+			Whitebox: &testlayout.Category{Allowed: new(true)},
+		}, "fixtureunparsable")
+	})
+
+	It("names the setting when no helper file may hold a shared fixture", func() {
+		runAnalysis(testlayout.Settings{
+			Blackbox: &testlayout.Category{HelperPatterns: []string{}},
+		}, "fixturenohelpers")
+	})
 })
 
 // runAnalysis drives the analyzer over testdata/src/<pattern> and asserts

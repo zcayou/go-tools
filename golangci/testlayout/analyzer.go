@@ -6,7 +6,9 @@ import (
 	"go/ast"
 	"go/build"
 	"go/token"
+	"maps"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"golang.org/x/tools/go/analysis"
@@ -53,6 +55,14 @@ const (
 	// RuleSuiteFileContents fires on anything a suite file declares beyond the go
 	// test entry point and the suite-level hooks.
 	RuleSuiteFileContents Rule = "suite-file-contents"
+
+	// RuleMisplacedFixture fires on a fixture a spec file declares that another
+	// file consumes, which a reader of that file finds only by searching.
+	RuleMisplacedFixture Rule = "misplaced-fixture"
+
+	// RuleSingleConsumerHelperFile fires on a helper file whose every fixture
+	// serves one file, which a name promising shared fixtures should not hold.
+	RuleSingleConsumerHelperFile Rule = "single-consumer-helper-file"
 )
 
 const testSuffix = "_test.go"
@@ -65,7 +75,8 @@ directory holds no source to test; each kind is allowed or not and named after
 a configured set of patterns. A file named for a source file carries the specs
 for it; a file named for a supporting role carries no specs. Where Ginkgo is
 used, the adapter that calls RunSpecs sits in a file reserved for it, and it
-exists.`
+exists. A fixture lives in the one file consuming it, or in a helper file when
+more than one does.`
 
 // NewAnalyzer builds the analyzer that enforces the layout conventions under
 // settings. It fails on settings no file could satisfy.
@@ -104,6 +115,11 @@ func (c *checker) run(pass *analysis.Pass) (any, error) {
 		return nil, err
 	}
 
+	siblings, err := readSiblings(dir, own)
+	if err != nil {
+		return nil, err
+	}
+
 	for _, file := range own {
 		if !c.checkFile(pass, file, dir) {
 			continue
@@ -111,7 +127,8 @@ func (c *checker) run(pass *analysis.Pass) (any, error) {
 		c.checkAdapterFile(pass, file, dir.sources)
 		c.checkSuiteFile(pass, file, dir.sources)
 	}
-	return nil, c.checkAdapterExists(pass, own, dir)
+	c.checkFixtures(pass, own, siblings, dir)
+	return nil, c.checkAdapterExists(pass, own, siblings, dir)
 }
 
 // checkFile reports what one test file's kind and name violate, and reports
@@ -177,6 +194,120 @@ func (c *checker) checkSuiteFile(pass *analysis.Pass, file testFile, srcs source
 	}
 }
 
+// checkFixtures reports fixtures held away from the files that consume them:
+// one in a spec file that another file consumes, and a helper file serving only
+// one file. Every test file of the directory counts as a consumer, whatever
+// its build constraints, since where a fixture lives is a property
+// of the source tree rather than of one build; a file that will not parse
+// could consume anything, so nothing is said.
+func (c *checker) checkFixtures(pass *analysis.Pass, own []testFile, siblings siblings, dir directory) {
+	if len(siblings.unparsed) > 0 {
+		return
+	}
+
+	files := slices.Concat(own, slices.Collect(maps.Values(siblings.files)))
+	byName := make(map[string]testFile, len(files))
+	for _, file := range files {
+		byName[file.name] = file
+	}
+
+	var sources []*ast.File
+	for _, syntax := range pass.Files {
+		if !strings.HasSuffix(pass.Fset.Position(syntax.Package).Filename, testSuffix) {
+			sources = append(sources, syntax)
+		}
+	}
+	underTest := pass.Pkg.Path()
+	if strings.HasSuffix(pass.Pkg.Name(), "_test") {
+		underTest = strings.TrimSuffix(underTest, "_test")
+	}
+	graph := readFixtures(files, sources, underTest)
+
+	// canHold reports whether the file named consumer could declare what from
+	// declares: it shares from's package, and it is not a suite file, which
+	// holds nothing beyond its entry point and hooks.
+	canHold := func(consumer string, from testFile) bool {
+		file := byName[consumer]
+		return file.syntax.Name.Name == from.syntax.Name.Name && c.role(file, dir) != roleSuite
+	}
+
+	for _, file := range own {
+		category := c.config.category(file, dir)
+		if !category.allowed {
+			continue
+		}
+		switch c.role(file, dir) {
+		case roleSpec:
+			for _, f := range graph.byFile[file.name] {
+				consumers := sortedKeys(f.consumers)
+				switch {
+				case len(consumers) == 0 || slices.Equal(consumers, []string{file.name}):
+				case len(consumers) == 1 && canHold(consumers[0], file):
+					report(pass, f.ident.Pos(), RuleMisplacedFixture, fmt.Sprintf(
+						"%s is used only by %s; declare it there", f.name, consumers[0]))
+				default:
+					report(pass, f.ident.Pos(), RuleMisplacedFixture, fmt.Sprintf(
+						"%s is used by %s; %s", f.name, strings.Join(consumers, ", "), category.fixturesBelong()))
+				}
+			}
+
+		case roleHelper:
+			served := make(map[string]bool)
+			for _, f := range graph.byFile[file.name] {
+				maps.Copy(served, f.consumers)
+			}
+			delete(served, file.name)
+			if consumers := sortedKeys(served); len(consumers) == 1 && canHold(consumers[0], file) {
+				report(pass, file.syntax.Package, RuleSingleConsumerHelperFile, fmt.Sprintf(
+					"everything %s declares serves only %s; move it there", file.name, consumers[0]))
+			}
+
+		case roleSuite, roleOther:
+			// suite-file-contents already judges what a suite file declares, and a file
+			// no pattern names has its name to answer for first.
+		}
+	}
+}
+
+// role is what a test file's name says it holds, for the rules judging where
+// fixtures live.
+type role int
+
+const (
+	// roleOther is a file no pattern names. It draws test-file-name,
+	// and the fixture rules count it as a consumer without judging it.
+	roleOther role = iota
+
+	// roleHelper is a file named for a supporting role.
+	roleHelper
+
+	// roleSuite is a file reserved for the Ginkgo adapter.
+	roleSuite
+
+	// roleSpec is a file named for what it exercises.
+	roleSpec
+)
+
+// role reads a file's role off its name. Helper patterns are consulted first,
+// as [checker.checkFile] consults them, and a suite file matching a spec
+// pattern, as suite_test.go does by default, is a suite file.
+func (c *checker) role(file testFile, dir directory) role {
+	category := c.config.category(file, dir)
+	switch {
+	case category.helpers.matches(file.name, dir.sources):
+		return roleHelper
+	case c.config.adapters.matches(file.name, dir.sources):
+		return roleSuite
+	case category.specs.matches(file.name, dir.sources):
+		return roleSpec
+	}
+	return roleOther
+}
+
+func sortedKeys(set map[string]bool) []string {
+	return slices.Sorted(maps.Keys(set))
+}
+
 // checkAdapterExists reports a package that registers Ginkgo specs with nothing
 // to run them.
 //
@@ -186,7 +317,7 @@ func (c *checker) checkSuiteFile(pass *analysis.Pass, file testFile, srcs source
 // than a file in another directory, so it neither supplies an adapter nor
 // demands one. What a custom run.build-tags would add is out of reach, because
 // a plugin cannot read that setting.
-func (c *checker) checkAdapterExists(pass *analysis.Pass, own []testFile, dir directory) error {
+func (c *checker) checkAdapterExists(pass *analysis.Pass, own []testFile, siblings siblings, dir directory) error {
 	held := make(map[string]testFile, len(own))
 	for _, file := range own {
 		held[file.name] = file
@@ -207,15 +338,10 @@ func (c *checker) checkAdapterExists(pass *analysis.Pass, own []testFile, dir di
 				return fmt.Errorf("reading %s: %w", name, err)
 			case !compiled:
 				continue
-			}
-			parsed, err := inspectPath(filepath.Join(dir.path, name))
-			switch {
-			case errors.Is(err, errUnparsed):
+			case siblings.unparsed[name]:
 				return nil
-			case err != nil:
-				return err
 			}
-			found = parsed
+			found = siblings.files[name].info
 		}
 
 		if found.adapter.IsValid() {
@@ -264,15 +390,51 @@ func testFiles(pass *analysis.Pass) []testFile {
 		if !strings.HasSuffix(path, testSuffix) {
 			continue
 		}
-		files = append(files, testFile{
-			syntax:   syntax,
-			path:     path,
-			name:     filepath.Base(path),
-			blackbox: strings.HasSuffix(syntax.Name.Name, "_test"),
-			info:     inspect(syntax),
-		})
+		files = append(files, newTestFile(syntax, path))
 	}
 	return files
+}
+
+func newTestFile(syntax *ast.File, path string) testFile {
+	return testFile{
+		syntax:   syntax,
+		path:     path,
+		name:     filepath.Base(path),
+		blackbox: strings.HasSuffix(syntax.Name.Name, "_test"),
+		info:     inspect(syntax),
+	}
+}
+
+// siblings are the test files of a directory that a pass does not hold:
+// the other test package's, and those of builds other than the one the pass
+// covers. They are read from disk, whatever their build constraints, and each
+// rule decides which of them it counts.
+type siblings struct {
+	files map[string]testFile
+
+	// unparsed names the files that will not parse. What such a file holds
+	// is unknown, so a rule it could answer for says nothing.
+	unparsed map[string]bool
+}
+
+func readSiblings(dir directory, own []testFile) (siblings, error) {
+	read := siblings{files: make(map[string]testFile), unparsed: make(map[string]bool)}
+	for _, name := range dir.tests {
+		if slices.ContainsFunc(own, func(file testFile) bool { return file.name == name }) {
+			continue
+		}
+		path := filepath.Join(dir.path, name)
+		syntax, err := parsePath(path)
+		switch {
+		case errors.Is(err, errUnparsed):
+			read.unparsed[name] = true
+		case err != nil:
+			return siblings{}, err
+		default:
+			read.files[name] = newTestFile(syntax, path)
+		}
+	}
+	return read, nil
 }
 
 // otherPackage names the package a test file of the other kind would declare,

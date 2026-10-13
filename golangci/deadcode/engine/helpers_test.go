@@ -6,6 +6,7 @@ import (
 	"go/parser"
 	"go/token"
 	"go/types"
+	"path/filepath"
 	"strconv"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -133,4 +134,12 @@ func buildSSA(pkgs []*packages.Package) *engine.Program {
 	prog, _, err := engine.BuildProgram(pkgs)
 	Expect(err).NotTo(HaveOccurred())
 	return prog
+}
+
+func fixtureDir(name string) string {
+	GinkgoHelper()
+
+	dir, err := filepath.Abs(filepath.Join("testdata", name))
+	Expect(err).NotTo(HaveOccurred())
+	return dir
 }

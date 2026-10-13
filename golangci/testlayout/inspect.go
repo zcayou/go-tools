@@ -91,15 +91,6 @@ func inspect(file *ast.File) info {
 	return found
 }
 
-// inspectPath reads a test file the pass does not hold.
-func inspectPath(path string) (info, error) {
-	file, err := parsePath(path)
-	if err != nil {
-		return info{}, err
-	}
-	return inspect(file), nil
-}
-
 // parsePath parses a file the pass does not hold from the directory
 // it is analyzing. Reading goes through the filesystem rather than
 // [analysis.Pass.ReadFile], which serves only the files of its own pass. A file
@@ -157,11 +148,7 @@ type ginkgoImports struct {
 func ginkgoImportsOf(file *ast.File) ginkgoImports {
 	var imports ginkgoImports
 	for _, spec := range file.Imports {
-		path, err := strconv.Unquote(spec.Path.Value)
-		if err != nil {
-			continue
-		}
-		name, ok := ginkgoPackages[path]
+		name, ok := ginkgoPackages[importPath(spec)]
 		if !ok {
 			continue
 		}
@@ -198,4 +185,14 @@ func (g ginkgoImports) callName(expr ast.Expr) string {
 		}
 	}
 	return ""
+}
+
+// importPath is the path an import declares, or "" for one that does not parse
+// as a string.
+func importPath(spec *ast.ImportSpec) string {
+	path, err := strconv.Unquote(spec.Path.Value)
+	if err != nil {
+		return ""
+	}
+	return path
 }

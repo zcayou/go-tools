@@ -29,6 +29,10 @@
 //     which Ginkgo rejects at run time.
 //   - suite-file-contents: anything a suite file declares beyond its reason
 //     for existing.
+//   - misplaced-fixture: a fixture a spec file declares that another file
+//     consumes, which a reader of that file finds only by searching.
+//   - single-consumer-helper-file: a helper file serving only one file, which
+//     separates its fixtures from the only specs that explain them.
 //
 // # Names, and what <source> means
 //
@@ -116,6 +120,48 @@
 // own. Both apply only where Ginkgo is used: a package of plain go test
 // functions has no adapter to place.
 //
+// # Fixtures
+//
+// A fixture is a package-level declaration of a test file that specs use but
+// that registers nothing itself: a function, a type, a variable, or a constant,
+// each name of a grouped declaration on its own. A method goes with its
+// receiver's type. Everything else at the top level of a test file is a root —
+// a spec, a go test entry point, an init function, a suite hook — and a file
+// consumes a fixture when one of its roots reaches it, directly or through
+// other fixtures in any file.
+//
+// A helper name promises that what the file holds is shared, so where a fixture
+// lives follows from the files consuming it. One in a spec file that another
+// file consumes belongs in that file when it is the only consumer and could
+// declare it, and in a helper file otherwise. A helper file whose fixtures all
+// serve one file belongs in that file. The helper file is judged whole rather
+// than fixture by fixture: a fixture written for one spec and expected to grow
+// belongs in a helper file well before its second consumer arrives, while
+// a helper file serving one file throughout has no such excuse.
+//
+// A consumer could declare a fixture when it shares the fixture's package
+// and is not a suite file. A black-box file reaching into the white-box package
+// through export_test.go cannot hold what it uses, and a suite file holds
+// nothing beyond its entry point and hooks, so neither is ever where a fixture
+// is sent. A fixture nothing consumes is unused code, which is another linter's
+// to report.
+//
+// Consumers are read from every test file in the directory, both test
+// packages and every build, because where a fixture lives is a property
+// of the source tree rather than of one platform's build: a fixture serving
+// fs_linux_test.go and fs_windows_test.go is shared though no one build
+// compiles both. A test file that will not parse could consume anything, so
+// beside one nothing is said.
+//
+// References are resolved without type information. A package-level name
+// is declared once, and one clashing with a dot-imported name does not compile,
+// so a name that no enclosing scope declares afresh is the fixture. A selector
+// names a fixture only when it is qualified by an import of the package under
+// test. A composite literal's key is read as a field name unless the literal's
+// type is visibly a map, slice, or array, written out or declared as one
+// in a file the linter reads, so a fixture keying a literal of an imported map
+// type is missed.
+//
 // # Settings
 //
 // [Settings] carries a [Category] for each kind, and the names reserved
@@ -164,7 +210,10 @@
 // # Load mode
 //
 // Every rule is syntactic, so the linter runs under [register.LoadModeSyntax]
-// and never forces type checking on a consumer.
+// and never forces type checking on a consumer. The fixture rules are no
+// exception, and could not be otherwise: type information covers one test
+// package and one build, while a fixture's consumers span both test packages
+// and every build.
 //
 // # Suppression
 //
@@ -172,8 +221,9 @@
 // name, so a "nolint:testlayout" comment suppresses a finding. This linter does
 // not interpret such directives itself. A diagnostic is positioned on the
 // package clause, which is the line such a directive has to sit on, except for
-// ginkgo-adapter-file, which sits on the RunSpecs call, and suite-file-contents,
-// which sits on the declaration it is about.
+// ginkgo-adapter-file, which sits on the RunSpecs call, suite-file-contents,
+// which sits on the declaration it is about, and misplaced-fixture, which sits
+// on the name of the fixture.
 //
 // The directive is spelled out rather than written here, because golangci-lint
 // reads one out of any comment line — trimming leading slashes and spaces first

@@ -1,6 +1,6 @@
 // Nothing here reaches Ginkgo: the harness's RunSpecs is a method, and the bare
-// Describe is the package's own. A blank import of Ginkgo brings none of its
-// names into the file.
+// Describe is the package's own, which does not make it a Ginkgo package.
+// A blank import of Ginkgo brings none of its names into the file.
 package lookalikes_test
 
 import (
@@ -14,6 +14,8 @@ import (
 type harness struct{}
 
 func (harness) RunSpecs(t *testing.T, description string) { t.Log(description) }
+
+func Describe(text string, body func()) bool { body(); return true }
 
 var _ = Describe("Widget", func() {})
 

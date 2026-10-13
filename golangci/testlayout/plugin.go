@@ -189,6 +189,16 @@ func (c category) helpersBelong() string {
 	return "a file carrying only helpers must be named " + c.helpers.String()
 }
 
+// fixturesBelong says where a fixture another file consumes should have been
+// declared. An explicitly empty list of helper patterns leaves no such file,
+// so the setting that decided it is named instead.
+func (c category) fixturesBelong() string {
+	if len(c.helpers) == 0 {
+		return c.name + ".helper-patterns is empty, so no file of this kind may hold a fixture another file uses"
+	}
+	return "a fixture another file uses belongs in a file named " + c.helpers.String()
+}
+
 // resolve fills in the defaults and compiles the patterns, rejecting
 // a configuration no file could satisfy.
 func (s Settings) resolve() (config, error) {

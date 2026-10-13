@@ -1224,14 +1224,6 @@ var _ = Describe("Analyze", func() {
 	})
 })
 
-func fixtureDir(name string) string {
-	GinkgoHelper()
-
-	dir, err := filepath.Abs(filepath.Join("testdata", name))
-	Expect(err).NotTo(HaveOccurred())
-	return dir
-}
-
 func chdir(dir string) {
 	GinkgoHelper()
 

@@ -51,6 +51,11 @@ linters:
           adapter-patterns: [suite_test.go]
 ```
 
+A fixture — a package-level declaration specs use — lives in the one file
+consuming it, or in a helper file when more than one does: `misplaced-fixture`
+reports one a spec file declares for another file, and
+`single-consumer-helper-file` a helper file serving only one.
+
 Exclude directories with their own layout through `linters.exclusions.paths`.
 Don't enable golangci-lint's built-in `testpackage` alongside this linter —
 they overlap under the default settings.
