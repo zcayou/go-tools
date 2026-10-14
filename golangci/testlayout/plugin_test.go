@@ -1,10 +1,15 @@
 package testlayout_test
 
 import (
+	"errors"
+	"path"
+
 	"github.com/golangci/plugin-module-register/register"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/onsi/gomega/types"
 
+	"github.com/zcayou/go-tools/golangci/internal/filepattern"
 	"github.com/zcayou/go-tools/golangci/testlayout"
 )
 
@@ -26,7 +31,8 @@ var _ = Describe("Plugin", func() {
 	It("rejects an unknown settings key rather than ignoring it", func() {
 		_, err := testlayout.New(map[string]any{"dedicated-test-dirs": []string{"integration"}})
 
-		Expect(err).To(MatchError(ContainSubstring("dedicated-test-dirs")))
+		Expect(err).To(beConfigError(0, 0, testlayout.ProblemUndecodable))
+		Expect(errors.Unwrap(err)).To(MatchError(ContainSubstring(`unknown field "dedicated-test-dirs"`)))
 	})
 
 	It("rejects a malformed pattern rather than leaving it matching nothing", func() {
@@ -34,7 +40,9 @@ var _ = Describe("Plugin", func() {
 			"blackbox": map[string]any{"patterns": []string{"[_test.go"}},
 		})
 
-		Expect(err).To(MatchError(ContainSubstring("blackbox.patterns")))
+		Expect(err).To(beConfigError(testlayout.KindBlackbox, testlayout.SettingPatterns,
+			testlayout.ProblemMalformedPattern))
+		Expect(err).To(MatchError(path.ErrBadPattern))
 	})
 
 	It("rejects a malformed helper pattern rather than leaving it matching nothing", func() {
@@ -42,13 +50,14 @@ var _ = Describe("Plugin", func() {
 			"blackbox": map[string]any{"helper-patterns": []string{"[helpers_test.go"}},
 		})
 
-		Expect(err).To(MatchError(ContainSubstring("blackbox.helper-patterns")))
+		Expect(err).To(beConfigError(testlayout.KindBlackbox, testlayout.SettingHelperPatterns,
+			testlayout.ProblemMalformedPattern))
 	})
 
 	It("rejects a malformed adapter pattern rather than leaving it matching nothing", func() {
 		_, err := testlayout.New(map[string]any{"adapter-patterns": []string{"[suite_test.go"}})
 
-		Expect(err).To(MatchError(ContainSubstring("adapter-patterns")))
+		Expect(err).To(beConfigError(0, testlayout.SettingAdapterPatterns, testlayout.ProblemMalformedPattern))
 	})
 
 	It("rejects a pattern naming the source twice, which it cannot resolve", func() {
@@ -56,7 +65,9 @@ var _ = Describe("Plugin", func() {
 			"whitebox": map[string]any{"patterns": []string{"<source>_<source>_test.go"}},
 		})
 
-		Expect(err).To(MatchError(ContainSubstring("may appear once")))
+		Expect(err).To(beConfigError(testlayout.KindWhitebox, testlayout.SettingPatterns,
+			testlayout.ProblemMalformedPattern))
+		Expect(err).To(wrapPatternProblem(filepattern.ProblemRepeatedSource))
 	})
 
 	It("rejects a glob wrapped around the source token, which is matched literally", func() {
@@ -64,7 +75,7 @@ var _ = Describe("Plugin", func() {
 			"blackbox": map[string]any{"patterns": []string{"*_<source>_test.go"}},
 		})
 
-		Expect(err).To(MatchError(ContainSubstring("cannot be combined with a glob")))
+		Expect(err).To(wrapPatternProblem(filepattern.ProblemGlobAroundSource))
 	})
 
 	It("rejects a pattern holding a path, since it matches against a file name", func() {
@@ -72,13 +83,15 @@ var _ = Describe("Plugin", func() {
 			"blackbox": map[string]any{"patterns": []string{"pkg/<source>_test.go"}},
 		})
 
-		Expect(err).To(MatchError(ContainSubstring("no path separator")))
+		Expect(err).To(wrapPatternProblem(filepattern.ProblemPathSeparator))
 	})
 
 	It("rejects an empty adapter-patterns, which no file could satisfy", func() {
 		_, err := testlayout.New(map[string]any{"adapter-patterns": []string{}})
 
-		Expect(err).To(MatchError(ContainSubstring("adapter-patterns is empty")))
+		Expect(err).To(MatchError(&testlayout.ConfigError{
+			Setting: testlayout.SettingAdapterPatterns, Problem: testlayout.ProblemNoAdapterName,
+		}))
 	})
 
 	It("rejects every category being disallowed, which no test file could satisfy", func() {
@@ -88,7 +101,7 @@ var _ = Describe("Plugin", func() {
 			"standalone": map[string]any{"allowed": false},
 		})
 
-		Expect(err).To(MatchError(ContainSubstring("no kind of test file is allowed")))
+		Expect(err).To(MatchError(&testlayout.ConfigError{Problem: testlayout.ProblemNoKindAllowed}))
 	})
 
 	It("accepts tests confined to standalone packages, with neither kind beside a source allowed", func() {
@@ -105,7 +118,8 @@ var _ = Describe("Plugin", func() {
 			"standalone": map[string]any{"patterns": []string{"[_test.go"}},
 		})
 
-		Expect(err).To(MatchError(ContainSubstring("standalone.patterns")))
+		Expect(err).To(beConfigError(testlayout.KindStandalone, testlayout.SettingPatterns,
+			testlayout.ProblemMalformedPattern))
 	})
 
 	It("rejects the source token in standalone patterns, which name no source", func() {
@@ -113,7 +127,12 @@ var _ = Describe("Plugin", func() {
 			"standalone": map[string]any{"patterns": []string{"<source>_test.go"}},
 		})
 
-		Expect(err).To(MatchError(ContainSubstring("standalone.patterns")))
+		Expect(err).To(MatchError(&testlayout.ConfigError{
+			Kind:    testlayout.KindStandalone,
+			Setting: testlayout.SettingPatterns,
+			Problem: testlayout.ProblemSourcelessPattern,
+			Pattern: "<source>_test.go",
+		}))
 	})
 
 	It("rejects the source token in standalone helper patterns, which name no source", func() {
@@ -121,7 +140,12 @@ var _ = Describe("Plugin", func() {
 			"standalone": map[string]any{"helper-patterns": []string{"<source>_helpers_test.go"}},
 		})
 
-		Expect(err).To(MatchError(ContainSubstring("standalone.helper-patterns")))
+		Expect(err).To(MatchError(&testlayout.ConfigError{
+			Kind:    testlayout.KindStandalone,
+			Setting: testlayout.SettingHelperPatterns,
+			Problem: testlayout.ProblemSourcelessPattern,
+			Pattern: "<source>_helpers_test.go",
+		}))
 	})
 
 	It("rejects a category allowed under no name at all", func() {
@@ -129,7 +153,7 @@ var _ = Describe("Plugin", func() {
 			"blackbox": map[string]any{"patterns": []string{}, "helper-patterns": []string{}},
 		})
 
-		Expect(err).To(MatchError(ContainSubstring("blackbox is allowed but no pattern permits any name")))
+		Expect(err).To(MatchError(&testlayout.ConfigError{Kind: testlayout.KindBlackbox, Problem: testlayout.ProblemNoName}))
 	})
 
 	It("allows a disallowed category to name nothing, since nothing is what it permits", func() {
@@ -158,3 +182,26 @@ var _ = Describe("Plugin", func() {
 		Expect(plugin.GetLoadMode()).To(Equal(register.LoadModeSyntax))
 	})
 })
+
+// beConfigError matches a [testlayout.ConfigError] at the given place,
+// whatever cause it carries.
+func beConfigError(kind testlayout.Kind, setting testlayout.Setting, problem testlayout.Problem) types.GomegaMatcher {
+	return SatisfyAll(
+		BeAssignableToTypeOf(&testlayout.ConfigError{}),
+		HaveField("Kind", kind),
+		HaveField("Setting", setting),
+		HaveField("Problem", problem),
+	)
+}
+
+// wrapPatternProblem matches an error carrying a [filepattern.Error]
+// for the given problem.
+func wrapPatternProblem(problem filepattern.Problem) types.GomegaMatcher {
+	return WithTransform(func(err error) filepattern.Problem {
+		patternErr, ok := errors.AsType[*filepattern.Error](err)
+		if !ok {
+			return 0
+		}
+		return patternErr.Problem
+	}, Equal(problem))
+}

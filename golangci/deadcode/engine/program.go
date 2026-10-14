@@ -69,5 +69,8 @@ func completeProgram(prog *ssa.Program) (*program, error) {
 			return &program{Program: prog, funcs: funcs}, nil
 		}
 	}
-	return nil, fmt.Errorf("building ssa: the program's functions did not settle within %d passes", maxCompletionPasses)
+	return nil, &RunError{
+		Stage: StageBuildingSSA,
+		cause: fmt.Errorf("the program's functions did not settle within %d passes", maxCompletionPasses),
+	}
 }

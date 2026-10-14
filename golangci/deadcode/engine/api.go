@@ -3,7 +3,6 @@ package engine
 import (
 	"cmp"
 	"errors"
-	"fmt"
 	"slices"
 	"strings"
 
@@ -26,8 +25,8 @@ type apiSurface struct {
 // would be exempt and nothing would be rooted, so the caller asked
 // for something it is not getting.
 func newAPISurface(patterns []string, exempts []Kind, generics GenericRooting) (*apiSurface, error) {
-	if generics != "" && !slices.Contains(GenericRootings(), generics) {
-		return nil, fmt.Errorf("unknown api generic rooting %q: want one of %s", generics, rootingList())
+	if generics != 0 && !slices.Contains(GenericRootings(), generics) {
+		return nil, &ConfigError{Setting: SettingAPIGenerics, Problem: ProblemUnknownValue, Value: generics.String()}
 	}
 	surface := &apiSurface{exempts: map[Kind]bool{}}
 	for _, pattern := range patterns {
@@ -37,16 +36,16 @@ func newAPISurface(patterns []string, exempts []Kind, generics GenericRooting) (
 	}
 	for _, exempt := range exempts {
 		if !slices.Contains(Kinds(), exempt) {
-			return nil, fmt.Errorf("unknown api exemption %q: want one of %s", exempt, kindList())
+			return nil, &ConfigError{Setting: SettingAPIExempt, Problem: ProblemUnknownValue, Value: exempt.String()}
 		}
 		surface.exempts[exempt] = true
 	}
 	if len(surface.patterns) == 0 {
 		if len(surface.exempts) > 0 {
-			return nil, errors.New("api exemptions require api patterns")
+			return nil, &ConfigError{Setting: SettingAPIExempt, Problem: ProblemRequiresAPI}
 		}
-		if generics != "" && generics != GenericRootingSkip {
-			return nil, errors.New("api generic rooting requires api patterns")
+		if generics != 0 && generics != GenericRootingSkip {
+			return nil, &ConfigError{Setting: SettingAPIGenerics, Problem: ProblemRequiresAPI}
 		}
 		surface.generics = GenericRootingSkip
 		return surface, nil
@@ -64,28 +63,12 @@ func (s *apiSurface) rootsInstantiations() bool {
 	return s.generics == GenericRootingInstantiated
 }
 
-func rootingList() string {
-	names := make([]string, 0, len(GenericRootings()))
-	for _, rooting := range GenericRootings() {
-		names = append(names, string(rooting))
-	}
-	return strings.Join(names, ", ")
-}
-
-func kindList() string {
-	names := make([]string, 0, len(Kinds()))
-	for _, kind := range Kinds() {
-		names = append(names, string(kind))
-	}
-	return strings.Join(names, ", ")
-}
-
 // resolve turns the API patterns into the package paths they match.
 func (s *apiSurface) resolve(load *packages.Config) error {
 	if len(s.patterns) == 0 {
 		return nil
 	}
-	resolved, err := resolvePatterns(load, "api", s.patterns)
+	resolved, err := resolvePatterns(load, SettingAPI, s.patterns)
 	if err != nil {
 		return err
 	}
@@ -96,7 +79,7 @@ func (s *apiSurface) resolve(load *packages.Config) error {
 // resolvePatterns turns package patterns into the paths they match, loading
 // names only. Patterns resolve against the same build configuration
 // as the analysis so that build tags apply.
-func resolvePatterns(load *packages.Config, what string, patterns []string) (map[string]bool, error) {
+func resolvePatterns(load *packages.Config, setting Setting, patterns []string) (map[string]bool, error) {
 	names := &packages.Config{
 		Mode:       packages.NeedName,
 		Context:    load.Context,
@@ -106,7 +89,7 @@ func resolvePatterns(load *packages.Config, what string, patterns []string) (map
 	}
 	matched, err := packages.Load(names, patterns...)
 	if err != nil {
-		return nil, fmt.Errorf("resolving %s packages: %w", what, err)
+		return nil, &ConfigError{Setting: setting, Problem: ProblemUnresolvable, Value: strings.Join(patterns, ","), cause: err}
 	}
 	resolved := map[string]bool{}
 	for _, pkg := range matched {
@@ -119,14 +102,16 @@ func resolvePatterns(load *packages.Config, what string, patterns []string) (map
 			for _, e := range pkg.Errors {
 				errs = append(errs, e)
 			}
-			return nil, fmt.Errorf("resolving %s pattern %s: %w", what, pkg.PkgPath, errors.Join(errs...))
+			return nil, &ConfigError{
+				Setting: setting, Problem: ProblemUnresolvable, Value: pkg.PkgPath, cause: errors.Join(errs...),
+			}
 		}
 		if pkg.PkgPath != "" {
 			resolved[pkg.PkgPath] = true
 		}
 	}
 	if len(resolved) == 0 {
-		return nil, fmt.Errorf("%s %s matched no packages", what, strings.Join(patterns, ","))
+		return nil, &ConfigError{Setting: setting, Problem: ProblemMatchesNothing, Value: strings.Join(patterns, ",")}
 	}
 	return resolved, nil
 }

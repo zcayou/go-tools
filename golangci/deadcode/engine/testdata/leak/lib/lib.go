@@ -1,4 +1,4 @@
-// Package lib holds four vocabularies. Production compares three and renders
+// Package lib holds four enums. Production compares three and renders
 // none of them; each of those three is rendered by a test, from a different
 // place. The fourth production renders from a package-level initializer.
 package lib

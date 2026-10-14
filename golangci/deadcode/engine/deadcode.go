@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 
 	"golang.org/x/tools/go/packages"
@@ -26,22 +27,22 @@ const loadMode = packages.NeedName | packages.NeedFiles | packages.NeedCompiledG
 // Kind classifies a finding by the sort of declaration it names. It decides
 // what a declared API surface exempts, which turns on what a consumer can reach
 // rather than on the wording of the verdict.
-type Kind string
+type Kind int
 
 const (
 	// KindFunc is a package-level function, whether or not it is exported.
-	KindFunc Kind = "func"
+	KindFunc Kind = iota + 1
 	// KindMethod is a method on a concrete type, whether or not it is exported.
-	KindMethod Kind = "method"
+	KindMethod
 	// KindType is a package-level named type.
-	KindType Kind = "type"
+	KindType
 	// KindConst is a package-level constant.
-	KindConst Kind = "const"
+	KindConst
 	// KindVar is a package-level variable.
-	KindVar Kind = "var"
+	KindVar
 	// KindInterfaceMethod is a method an interface declares, which no concrete
 	// declaration backs.
-	KindInterfaceMethod Kind = "interface-method"
+	KindInterfaceMethod
 )
 
 // Kinds returns every [Kind], for callers validating an exemption list.
@@ -49,21 +50,51 @@ func Kinds() []Kind {
 	return []Kind{KindFunc, KindMethod, KindType, KindConst, KindVar, KindInterfaceMethod}
 }
 
+// String is the kind's token, which api-exempt lists.
+func (k Kind) String() string {
+	switch k {
+	case KindFunc:
+		return "func"
+	case KindMethod:
+		return "method"
+	case KindType:
+		return "type"
+	case KindConst:
+		return "const"
+	case KindVar:
+		return "var"
+	case KindInterfaceMethod:
+		return "interface-method"
+	default:
+		return "Kind(" + strconv.Itoa(int(k)) + ")"
+	}
+}
+
+// ParseKind returns the [Kind] a token names, or false for one no kind has.
+func ParseKind(name string) (Kind, bool) {
+	for _, kind := range Kinds() {
+		if kind.String() == name {
+			return kind, true
+		}
+	}
+	return 0, false
+}
+
 // GenericRooting is how a declared API package's generic declarations enter
 // the root set. The zero value reads as [GenericRootingInstantiated] wherever
 // an API is declared, and is inert everywhere else.
-type GenericRooting string
+type GenericRooting int
 
 const (
 	// GenericRootingSkip leaves generic declarations out of the root set, so
 	// what a generic API alone reaches is reported as unreachable, and lets
 	// no test's instantiation stand in for a consumer's in the masked view.
-	GenericRootingSkip GenericRooting = "skip"
+	GenericRootingSkip GenericRooting = iota + 1
 	// GenericRootingInstantiated roots the concrete instantiations the program
 	// builds of that surface, which is what makes the code beneath a generic API
 	// measurable at all, and weighs its sealed generic contracts against the same
 	// instantiations in both views.
-	GenericRootingInstantiated GenericRooting = "instantiated"
+	GenericRootingInstantiated
 )
 
 // GenericRootings returns every [GenericRooting], for callers validating one.
@@ -71,49 +102,92 @@ func GenericRootings() []GenericRooting {
 	return []GenericRooting{GenericRootingSkip, GenericRootingInstantiated}
 }
 
+// String is the rooting's token, which api-generics takes.
+func (r GenericRooting) String() string {
+	switch r {
+	case GenericRootingSkip:
+		return "skip"
+	case GenericRootingInstantiated:
+		return "instantiated"
+	default:
+		return "GenericRooting(" + strconv.Itoa(int(r)) + ")"
+	}
+}
+
+// ParseGenericRooting returns the [GenericRooting] a token names, or false
+// for one no rooting has.
+func ParseGenericRooting(name string) (GenericRooting, bool) {
+	for _, rooting := range GenericRootings() {
+		if rooting.String() == name {
+			return rooting, true
+		}
+	}
+	return 0, false
+}
+
 // Verdict is why a declaration was reported. The set is closed: every [Finding]
 // carries one of these, and one declaration can draw more than one. Under
-// [Config.Tests] each verdict also exists in a test-only form — the same token
-// prefixed with "test-only" — carried by a production declaration that only
-// test code keeps alive.
-type Verdict string
-
-// testOnly derives the test-only form of the verdict, the one a declaration
-// draws when the masked view reports it and the full view does not.
-func (v Verdict) testOnly() Verdict {
-	return "test-only " + v
-}
+// [Config.Tests] each verdict also exists in a test-only form, carried
+// by a production declaration that only test code keeps alive, which
+// [Finding.TestOnly] marks.
+type Verdict int
 
 const (
 	// VerdictUnreachable is a function no path from any root reaches.
-	VerdictUnreachable Verdict = "unreachable func"
+	VerdictUnreachable Verdict = iota + 1
 	// VerdictUnusedFunc is an exported function nothing outside its own body
 	// references.
-	VerdictUnusedFunc Verdict = "unused exported func"
+	VerdictUnusedFunc
 	// VerdictUnusedType is an exported type nothing outside its own declaration
 	// references.
-	VerdictUnusedType Verdict = "unused exported type"
+	VerdictUnusedType
 	// VerdictUnusedConst is an exported constant nothing references.
-	VerdictUnusedConst Verdict = "unused exported const"
+	VerdictUnusedConst
 	// VerdictUnusedVar is an exported variable nothing references.
-	VerdictUnusedVar Verdict = "unused exported var"
+	VerdictUnusedVar
 	// VerdictUnusedMethod is an exported method nothing selects and no interface
 	// bind credits.
-	VerdictUnusedMethod Verdict = "unused exported method"
+	VerdictUnusedMethod
 	// VerdictUnusedInterfaceMethod is a method an interface declares that nothing
 	// selects.
-	VerdictUnusedInterfaceMethod Verdict = "unused interface method"
+	VerdictUnusedInterfaceMethod
 	// VerdictReflectionLiveMethod is an exported method reachability keeps alive
 	// only through reflection, with no source-level use behind it.
-	VerdictReflectionLiveMethod Verdict = "unused reflection-live exported method"
+	VerdictReflectionLiveMethod
 	// VerdictUnmeasuredGeneric is a generic entry point — a declaration
 	// on the declared surface, or a method participation credits —
 	// that the program never instantiates and whose body makes a call the analysis
 	// cannot resolve. It claims nothing about the declaration: it says the run
 	// could not follow what the declaration reaches, so an unreachable verdict
 	// anywhere past that call would be a guess.
-	VerdictUnmeasuredGeneric Verdict = "unmeasured generic"
+	VerdictUnmeasuredGeneric
 )
+
+// String is the verdict's token.
+func (v Verdict) String() string {
+	switch v {
+	case VerdictUnreachable:
+		return "unreachable func"
+	case VerdictUnusedFunc:
+		return "unused exported func"
+	case VerdictUnusedType:
+		return "unused exported type"
+	case VerdictUnusedConst:
+		return "unused exported const"
+	case VerdictUnusedVar:
+		return "unused exported var"
+	case VerdictUnusedMethod:
+		return "unused exported method"
+	case VerdictUnusedInterfaceMethod:
+		return "unused interface method"
+	case VerdictReflectionLiveMethod:
+		return "unused reflection-live exported method"
+	case VerdictUnmeasuredGeneric:
+		return "unmeasured generic"
+	default:
+		return "Verdict(" + strconv.Itoa(int(v)) + ")"
+	}
+}
 
 // Config is one analysis request. The zero value analyzes ./... in the working
 // directory, rooted at whatever entry points it finds, with no declared API.
@@ -170,14 +244,14 @@ type Config struct {
 	// and Tests.
 	APITestConsumers bool
 
-	// VocabularyNames credits each closed vocabulary's published name: a String()
-	// string method on a value receiver, on a named type whose own package
-	// declares typed constants of it, counts as used and is a root. It states
-	// a repository's convention — every vocabulary member has a name, whether
-	// or not production renders one — rather than evidence the program carries, so
-	// it is off by default. Other methods of such a type, and a String on a type
-	// no constant is declared of, are judged as ever.
-	VocabularyNames bool
+	// EnumNames credits each enum's published name: a String() string method
+	// on a value receiver, on a named type whose own package declares typed
+	// constants of it, counts as used and is a root. It states a repository's
+	// convention — every enum member has a name, whether or not production renders
+	// one — rather than evidence the program carries, so it is off by default.
+	// Other methods of such a type, and a String on a type no constant is declared
+	// of, are judged as ever.
+	EnumNames bool
 
 	// TestFacing are package patterns whose intended consumers are tests:
 	// production-shaped code that exists to be exercised by test files. They join
@@ -206,6 +280,10 @@ type Finding struct {
 	// Verdict is why the declaration was reported.
 	Verdict Verdict
 
+	// TestOnly marks the verdict's test-only form: the declaration is production
+	// code only test evidence keeps alive.
+	TestOnly bool
+
 	// Name is the declaration, qualified by receiver or interface for a method.
 	Name string
 
@@ -214,6 +292,15 @@ type Finding struct {
 
 	// Package is the import path that declares it.
 	Package string
+}
+
+// Category is the token the finding is reported under: its verdict, prefixed
+// test-only in the test-only family.
+func (f Finding) Category() string {
+	if f.TestOnly {
+		return "test-only " + f.Verdict.String()
+	}
+	return f.Verdict.String()
 }
 
 // Analyze reports the declarations nothing in the loaded program can reach.
@@ -225,24 +312,15 @@ type Finding struct {
 // test-only form, holding the production declarations only test evidence keeps
 // alive. Callers that want a single positional order must sort.
 func Analyze(ctx context.Context, cfg Config) ([]Finding, error) {
-	surface, err := newAPISurface(cfg.API, cfg.APIExempt, cfg.APIGenerics)
+	surface, declared, err := validate(cfg)
 	if err != nil {
 		return nil, err
-	}
-	declared, err := newTestFacing(cfg.TestFacing, cfg.Tests)
-	if err != nil {
-		return nil, err
-	}
-	if cfg.APITestConsumers && (len(surface.patterns) == 0 || !cfg.Tests) {
-		// The masked view is all the setting speaks to, and the surface is what
-		// it admits evidence toward: without either there is nothing to stand in for.
-		return nil, errors.New("api test consumers require api patterns and tests")
 	}
 
 	dir := cfg.Dir
 	if dir == "" {
 		if dir, err = os.Getwd(); err != nil {
-			return nil, fmt.Errorf("getting working directory: %w", err)
+			return nil, &RunError{Stage: StageLoadingPackages, cause: err}
 		}
 	}
 
@@ -275,18 +353,18 @@ func Analyze(ctx context.Context, cfg Config) ([]Finding, error) {
 	// holds the interface.
 	whole := newInstantiations(pkgs, view{})
 	sealed := newSealedSurface(surface, whole, pkgs)
-	vocab := newVocabulary(pkgs, cfg.VocabularyNames)
+	credit := newEnumNames(pkgs, cfg.EnumNames)
 	copies := newReexports(pkgs, facts, surface)
 
 	prog, ssaPkgs, err := buildProgram(pkgs)
 	if err != nil {
 		return nil, err
 	}
-	if err = canceled(ctx, "building ssa"); err != nil {
+	if err = canceled(ctx, StageBuildingSSA); err != nil {
 		return nil, err
 	}
 
-	full, err := evaluate(ctx, prog, ssaPkgs, pkgs, surface, facts, methodDecls, copies, whole, sealed, vocab, cfg.Tests, view{})
+	full, err := evaluate(ctx, prog, ssaPkgs, pkgs, surface, facts, methodDecls, copies, whole, sealed, credit, cfg.Tests, view{})
 	if err != nil {
 		return nil, err
 	}
@@ -318,11 +396,33 @@ func Analyze(ctx context.Context, cfg Config) ([]Finding, error) {
 	if !surface.rootsInstantiations() {
 		sealed = newSealedSurface(surface, maskedInst, pkgs)
 	}
-	masked, err := evaluate(ctx, prog, ssaPkgs, pkgs, surface, facts, methodDecls, copies, maskedInst, sealed, vocab, false, mask)
+	masked, err := evaluate(ctx, prog, ssaPkgs, pkgs, surface, facts, methodDecls, copies, maskedInst, sealed, credit, false, mask)
 	if err != nil {
 		return nil, fmt.Errorf("analyzing test-only liveness: %w", err)
 	}
 	return append(findings, testOnlyFindings(full, masked, declared.packages)...), nil
+}
+
+// validate checks what the configuration asks for before anything loads,
+// returning the declared API surface and test-facing packages unresolved.
+func validate(cfg Config) (*apiSurface, *testFacing, error) {
+	surface, err := newAPISurface(cfg.API, cfg.APIExempt, cfg.APIGenerics)
+	if err != nil {
+		return nil, nil, err
+	}
+	declared, err := newTestFacing(cfg.TestFacing, cfg.Tests)
+	if err != nil {
+		return nil, nil, err
+	}
+	// The masked view is all the setting speaks to, and the surface is what
+	// it admits evidence toward: without either there is nothing to stand in for.
+	if cfg.APITestConsumers && len(surface.patterns) == 0 {
+		return nil, nil, &ConfigError{Setting: SettingAPITestConsumers, Problem: ProblemRequiresAPI}
+	}
+	if cfg.APITestConsumers && !cfg.Tests {
+		return nil, nil, &ConfigError{Setting: SettingAPITestConsumers, Problem: ProblemRequiresTests}
+	}
+	return surface, declared, nil
 }
 
 // loadProgram loads the analyzed program: the configured patterns, plus one
@@ -345,11 +445,17 @@ func loadProgram(ctx context.Context, cfg Config, dir string, load *packages.Con
 		}
 	}
 
+	// The loader flattens a canceled context into its own error text, so
+	// cancellation is checked before it runs, where the context's own error can
+	// still be returned.
+	if err := canceled(ctx, StageLoadingPackages); err != nil {
+		return nil, err
+	}
 	pkgs, err := packages.Load(load, patterns...)
 	if err != nil {
-		return nil, fmt.Errorf("loading packages: %w", err)
+		return nil, &RunError{Stage: StageLoadingPackages, cause: err}
 	}
-	if err = canceled(ctx, "loading packages"); err != nil {
+	if err = canceled(ctx, StageLoadingPackages); err != nil {
 		return nil, err
 	}
 	if err = loadErrors(pkgs); err != nil {
@@ -364,7 +470,7 @@ func loadProgram(ctx context.Context, cfg Config, dir string, load *packages.Con
 // evaluate runs every verdict pass over the built program under one evidence
 // view and returns the surface-filtered findings in report order. inst
 // is the instantiations the view admits, sealed the sealed surface it weighs,
-// and vocab the published names it credits.
+// and credit the enum names it credits.
 func evaluate(
 	ctx context.Context,
 	prog *program,
@@ -376,7 +482,7 @@ func evaluate(
 	copies reexports,
 	inst *instantiations,
 	sealed *sealedSurface,
-	vocab *vocabulary,
+	credit *enumNames,
 	tests bool,
 	v view,
 ) ([]declaration, error) {
@@ -393,7 +499,7 @@ func evaluate(
 	methodRefs := newMethodReferenceScan(pkgs, facts, ev, inst, v)
 	flows := newInterfaceFlows(prog, inst, methodRefs, v)
 	binds := newInterfaceBindScan(prog, pkgs, sealed, methodRefs, analyzedPackages(pkgs), ev, inst, flows, v)
-	if err := canceled(ctx, "scanning interface binds"); err != nil {
+	if err := canceled(ctx, StageScanningBinds); err != nil {
 		return nil, err
 	}
 
@@ -402,11 +508,11 @@ func evaluate(
 	// of them, because each would be asserting the same claim against the same
 	// facts.
 	participation := func(key string) bool {
-		return binds.bound(key) || methodRefs.dispatchCredited(key) || vocab.published(key)
+		return binds.bound(key) || methodRefs.dispatchCredited(key) || credit.published(key)
 	}
 
 	funcs, unmeasured, reach, err := unreachableFuncs(
-		ctx, prog, ssaPkgs, pkgs, surface, sealed, vocab, deadTypes, facts, tests, v, participation,
+		ctx, prog, ssaPkgs, pkgs, surface, sealed, credit, deadTypes, facts, tests, v, participation,
 	)
 	if err != nil {
 		return nil, err
@@ -452,8 +558,9 @@ func testOnlyFindings(full, masked []declaration, testFacing map[string]bool) []
 		if reported[declKey(decl.pos)] || testFile(decl.pos.Filename) || testFacing[decl.pkg] {
 			continue
 		}
-		decl.verdict = decl.verdict.testOnly()
-		findings = append(findings, newFinding(decl))
+		finding := newFinding(decl)
+		finding.TestOnly = true
+		findings = append(findings, finding)
 	}
 	return findings
 }
@@ -472,9 +579,9 @@ func newFinding(decl declaration) Finding {
 // Every stage after the load runs to completion once entered, so a deadline
 // is only observable between them and a result returned without this check
 // would be a full answer produced past the deadline.
-func canceled(ctx context.Context, stage string) error {
+func canceled(ctx context.Context, stage Stage) error {
 	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("%s: %w", stage, err)
+		return &RunError{Stage: stage, cause: err}
 	}
 	return nil
 }
@@ -493,7 +600,7 @@ func loadErrors(pkgs []*packages.Package) error {
 	if len(errs) == 0 {
 		return nil
 	}
-	return fmt.Errorf("packages contain errors: %w", errors.Join(errs...))
+	return &RunError{Stage: StageLoadingPackages, cause: fmt.Errorf("packages contain errors: %w", errors.Join(errs...))}
 }
 
 // analyzedPackages returns the import paths this run reports on, the interfaces

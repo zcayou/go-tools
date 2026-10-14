@@ -9,9 +9,12 @@ import (
 	"maps"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"golang.org/x/tools/go/analysis"
+
+	"github.com/zcayou/go-tools/golangci/internal/filepattern"
 )
 
 // Rule names the convention a diagnostic came from.
@@ -19,51 +22,79 @@ import (
 // golangci-lint discards [analysis.Diagnostic.Category], so the rule is also
 // the first word of every message; that is what makes it addressable
 // by a linters.exclusions text rule.
-type Rule string
+type Rule int
 
 const (
 	// RuleTestPackage fires on a test file of a kind the settings do not allow:
 	// a white-box file where only black-box files may be, or the reverse,
 	// or a standalone file where every test file sits beside a source.
-	RuleTestPackage Rule = "test-package"
+	RuleTestPackage Rule = iota + 1
 
 	// RuleTestFileName fires on a test file whose name no pattern for its kind
 	// allows — most often a spec file with no source file to be named after.
-	RuleTestFileName Rule = "test-file-name"
+	RuleTestFileName
 
 	// RuleSpecLessTestFile fires on a file named for the source it exercises
 	// that carries no specs, so the specs for that source are somewhere else.
-	RuleSpecLessTestFile Rule = "spec-less-test-file"
+	RuleSpecLessTestFile
 
 	// RuleSpecsInHelperFile fires on a file named for its supporting role
 	// that carries specs anyway, which puts specs where a reader is not looking.
-	RuleSpecsInHelperFile Rule = "specs-in-helper-file"
+	RuleSpecsInHelperFile
 
 	// RuleGinkgoAdapterFile fires where RunSpecs is called from a file
 	// the settings do not reserve for the adapter.
-	RuleGinkgoAdapterFile Rule = "ginkgo-adapter-file"
+	RuleGinkgoAdapterFile
 
 	// RuleGinkgoAdapterMissing fires on a package registering Ginkgo specs where
 	// no file the directory's test binary compiles calls RunSpecs, so none
 	// of those specs run.
-	RuleGinkgoAdapterMissing Rule = "ginkgo-adapter-missing"
+	RuleGinkgoAdapterMissing
 
 	// RuleGinkgoAdapterDuplicate fires on a second call to RunSpecs in one test
 	// binary, which Ginkgo rejects at run time.
-	RuleGinkgoAdapterDuplicate Rule = "ginkgo-adapter-duplicate"
+	RuleGinkgoAdapterDuplicate
 
 	// RuleSuiteFileContents fires on anything a suite file declares beyond the go
 	// test entry point and the suite-level hooks.
-	RuleSuiteFileContents Rule = "suite-file-contents"
+	RuleSuiteFileContents
 
 	// RuleMisplacedFixture fires on a fixture a spec file declares that another
 	// file consumes, which a reader of that file finds only by searching.
-	RuleMisplacedFixture Rule = "misplaced-fixture"
+	RuleMisplacedFixture
 
 	// RuleSingleConsumerHelperFile fires on a helper file whose every fixture
 	// serves one file, which a name promising shared fixtures should not hold.
-	RuleSingleConsumerHelperFile Rule = "single-consumer-helper-file"
+	RuleSingleConsumerHelperFile
 )
+
+// String is the rule's token, which opens every message the rule reports.
+func (r Rule) String() string {
+	switch r {
+	case RuleTestPackage:
+		return "test-package"
+	case RuleTestFileName:
+		return "test-file-name"
+	case RuleSpecLessTestFile:
+		return "spec-less-test-file"
+	case RuleSpecsInHelperFile:
+		return "specs-in-helper-file"
+	case RuleGinkgoAdapterFile:
+		return "ginkgo-adapter-file"
+	case RuleGinkgoAdapterMissing:
+		return "ginkgo-adapter-missing"
+	case RuleGinkgoAdapterDuplicate:
+		return "ginkgo-adapter-duplicate"
+	case RuleSuiteFileContents:
+		return "suite-file-contents"
+	case RuleMisplacedFixture:
+		return "misplaced-fixture"
+	case RuleSingleConsumerHelperFile:
+		return "single-consumer-helper-file"
+	default:
+		return "Rule(" + strconv.Itoa(int(r)) + ")"
+	}
+}
 
 const testSuffix = "_test.go"
 
@@ -141,26 +172,26 @@ func (c *checker) checkFile(pass *analysis.Pass, file testFile, dir directory) b
 
 	if !category.allowed {
 		report(pass, file.syntax.Package, RuleTestPackage, fmt.Sprintf(
-			"%s test files are not allowed; %s", category.name, category.forbidden(file.syntax.Name.Name)))
+			"%s test files are not allowed; %s", category.kind, category.forbidden(file.syntax.Name.Name)))
 		return false
 	}
 
 	// Helper patterns are consulted first, so a helpers.go sitting beside
 	// helpers_test.go does not turn it into a file owing specs.
 	switch {
-	case category.helpers.matches(file.name, dir.sources):
+	case category.helpers.Matches(file.name, dir.sources):
 		if file.info.specs {
 			report(pass, file.syntax.Package, RuleSpecsInHelperFile,
 				"a file named for its supporting role carries specs; "+category.specsBelong())
 		}
-	case category.specs.matches(file.name, dir.sources):
+	case category.specs.Matches(file.name, dir.sources):
 		if !file.info.specs {
 			report(pass, file.syntax.Package, RuleSpecLessTestFile,
 				"no specs or test functions; "+category.helpersBelong())
 		}
 	default:
 		report(pass, file.syntax.Package, RuleTestFileName, fmt.Sprintf(
-			"not a name a %s test file may have; want %s", category.name, category.names()))
+			"not a name a %s test file may have; want %s", category.kind, category.names()))
 	}
 	return true
 }
@@ -168,8 +199,8 @@ func (c *checker) checkFile(pass *analysis.Pass, file testFile, dir directory) b
 // checkAdapterFile reports an adapter outside the files reserved for it.
 // It does not consult whether the package uses Ginkgo: a call to RunSpecs
 // is Ginkgo.
-func (c *checker) checkAdapterFile(pass *analysis.Pass, file testFile, srcs sources) {
-	if !file.info.adapter.IsValid() || c.config.adapters.matches(file.name, srcs) {
+func (c *checker) checkAdapterFile(pass *analysis.Pass, file testFile, srcs filepattern.Sources) {
+	if !file.info.adapter.IsValid() || c.config.adapters.Matches(file.name, srcs) {
 		return
 	}
 	report(pass, file.info.adapter, RuleGinkgoAdapterFile,
@@ -181,8 +212,8 @@ func (c *checker) checkAdapterFile(pass *analysis.Pass, file testFile, srcs sour
 // and the hooks that bracket the whole binary. A helper here is out
 // of the place a reader looks for it, and a spec here registers against
 // the very suite the file is meant to start.
-func (c *checker) checkSuiteFile(pass *analysis.Pass, file testFile, srcs sources) {
-	if !c.config.adapters.matches(file.name, srcs) {
+func (c *checker) checkSuiteFile(pass *analysis.Pass, file testFile, srcs filepattern.Sources) {
+	if !c.config.adapters.Matches(file.name, srcs) {
 		return
 	}
 	imports := ginkgoImportsOf(file.syntax)
@@ -244,10 +275,10 @@ func (c *checker) checkFixtures(pass *analysis.Pass, own []testFile, siblings si
 				case len(consumers) == 0 || slices.Equal(consumers, []string{file.name}):
 				case len(consumers) == 1 && canHold(consumers[0], file):
 					report(pass, f.ident.Pos(), RuleMisplacedFixture, fmt.Sprintf(
-						"%s is used only by %s; declare it there", f.name, consumers[0]))
+						"%s is used only by %s; declare it there", f.name, f.consumerNames(consumers)))
 				default:
 					report(pass, f.ident.Pos(), RuleMisplacedFixture, fmt.Sprintf(
-						"%s is used by %s; %s", f.name, strings.Join(consumers, ", "), category.fixturesBelong()))
+						"%s is used by %s; %s", f.name, f.consumerNames(consumers), category.fixturesBelong()))
 				}
 			}
 
@@ -294,11 +325,11 @@ const (
 func (c *checker) role(file testFile, dir directory) role {
 	category := c.config.category(file, dir)
 	switch {
-	case category.helpers.matches(file.name, dir.sources):
+	case category.helpers.Matches(file.name, dir.sources):
 		return roleHelper
-	case c.config.adapters.matches(file.name, dir.sources):
+	case c.config.adapters.Matches(file.name, dir.sources):
 		return roleSuite
-	case category.specs.matches(file.name, dir.sources):
+	case category.specs.Matches(file.name, dir.sources):
 		return roleSpec
 	}
 	return roleOther
@@ -449,7 +480,7 @@ func otherPackage(name string) string {
 func report(pass *analysis.Pass, pos token.Pos, rule Rule, message string) {
 	pass.Report(analysis.Diagnostic{
 		Pos:      pos,
-		Category: string(rule),
-		Message:  string(rule) + ": " + message,
+		Category: rule.String(),
+		Message:  rule.String() + ": " + message,
 	})
 }

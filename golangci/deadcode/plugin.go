@@ -1,19 +1,11 @@
 package deadcode
 
 import (
-	"crypto/rand"
-	"errors"
-	"fmt"
-	"os"
-	"path/filepath"
-	"slices"
-	"strings"
-	"sync"
-
 	"github.com/golangci/plugin-module-register/register"
 	"golang.org/x/tools/go/analysis"
 
 	"github.com/zcayou/go-tools/golangci/deadcode/engine"
+	"github.com/zcayou/go-tools/golangci/internal/wholemodule"
 )
 
 // Name is what golangci-lint knows this linter by: the key under
@@ -78,14 +70,14 @@ type Settings struct {
 	// api and tests.
 	APITestConsumers bool `json:"api-test-consumers"`
 
-	// VocabularyNames credits each closed vocabulary's published name. A named
-	// type whose own package declares typed constants of it is a vocabulary,
-	// and a String() string method on a value receiver is its name: it counts
-	// as used, and what it calls stays live, whether or not production ever
-	// renders a member. Other methods of the type, and a String on a type
-	// with no declared constant, are judged as ever. Off by default, because
-	// it states a convention rather than evidence the program carries.
-	VocabularyNames bool `json:"vocabulary-names"`
+	// EnumNames credits each enum's published name. A named type whose own package
+	// declares typed constants of it is an enum, and a String() string method
+	// on a value receiver is its name: it counts as used, and what it calls stays
+	// live, whether or not production ever renders a member. Other methods
+	// of the type, and a String on a type with no declared constant, are judged
+	// as ever. Off by default, because it states a convention rather than evidence
+	// the program carries.
+	EnumNames bool `json:"enum-names"`
 
 	// TestFacing are package patterns whose intended consumers are tests:
 	// production-shaped code, a test plugin say, that exists to be exercised
@@ -107,10 +99,7 @@ type Settings struct {
 // contract. It holds the single analysis the whole run shares.
 type Plugin struct {
 	config engine.Config
-
-	once   sync.Once
-	byFile map[string][]engine.Finding
-	err    error
+	linter *wholemodule.Linter
 }
 
 var _ register.LinterPlugin = (*Plugin)(nil)
@@ -126,38 +115,21 @@ var _ register.LinterPlugin = (*Plugin)(nil)
 func New(settings any) (register.LinterPlugin, error) {
 	s, err := register.DecodeSettings[Settings](settings)
 	if err != nil {
-		// register.DecodeSettings already names the step, and golangci-lint prefixes
-		// the plugin.
-		return nil, err
+		return nil, engine.Undecodable(err)
 	}
 	config, err := configFrom(s)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", Name, err)
+		return nil, err
 	}
-	return &Plugin{config: config}, nil
+	p := &Plugin{config: config}
+	p.linter = wholemodule.New(Name, analyzerDoc, p.analyze)
+	return p, nil
 }
 
 // BuildAnalyzers returns the analyzer this linter runs, alongside the one
 // that keeps its results from being cached.
 func (p *Plugin) BuildAnalyzers() ([]*analysis.Analyzer, error) {
-	return []*analysis.Analyzer{p.analyzer(), uncacheable()}, nil
-}
-
-// uncacheable defeats golangci-lint's per-package issue cache. That cache keys
-// on a package and its imports, while dead-code liveness flows the other way,
-// from importers: a package whose own hash is unchanged would replay an answer
-// the edit that changed it never invalidated, silently keeping a finding
-// that is now wrong or losing one that is now right. golangci-lint folds every
-// analyzer name into the cache key, so a name unique to this process forces
-// a miss for every package.
-func uncacheable() *analysis.Analyzer {
-	var nonce [8]byte
-	_, _ = rand.Read(nonce[:])
-	return &analysis.Analyzer{
-		Name: fmt.Sprintf("%s_uncacheable_%x", Name, nonce),
-		Doc:  "forces a cache miss; reports nothing",
-		Run:  func(*analysis.Pass) (any, error) { return nil, nil },
-	}
+	return p.linter.Analyzers(), nil
 }
 
 // GetLoadMode asks for syntax only. The analyzer reads nothing but file names
@@ -177,14 +149,17 @@ func configFrom(s Settings) (engine.Config, error) {
 	if err != nil {
 		return engine.Config{}, err
 	}
-	if s.Patterns != nil && len(s.Patterns) == 0 {
-		return engine.Config{}, errors.New("patterns is empty: omit it to analyze the whole module")
-	}
-	if s.TestFacing != nil && len(s.TestFacing) == 0 {
-		return engine.Config{}, errors.New("test-facing is empty: omit it to declare no test-facing packages")
-	}
-	if s.Roots != nil && len(s.Roots) == 0 {
-		return engine.Config{}, errors.New("roots is empty: omit it to declare no root programs")
+	for _, list := range []struct {
+		setting engine.Setting
+		values  []string
+	}{
+		{engine.SettingPatterns, s.Patterns},
+		{engine.SettingTestFacing, s.TestFacing},
+		{engine.SettingRoots, s.Roots},
+	} {
+		if list.values != nil && len(list.values) == 0 {
+			return engine.Config{}, &engine.ConfigError{Setting: list.setting, Problem: engine.ProblemEmpty}
+		}
 	}
 
 	tests := true
@@ -192,13 +167,17 @@ func configFrom(s Settings) (engine.Config, error) {
 		tests = *s.Tests
 	}
 	if len(s.TestFacing) > 0 && !tests {
-		return engine.Config{}, errors.New("test-facing requires tests: the masked view is all it speaks to")
+		return engine.Config{}, &engine.ConfigError{Setting: engine.SettingTestFacing, Problem: engine.ProblemRequiresTests}
 	}
 	if s.APITestConsumers && len(s.API) == 0 {
-		return engine.Config{}, errors.New("api-test-consumers requires api")
+		return engine.Config{}, &engine.ConfigError{
+			Setting: engine.SettingAPITestConsumers, Problem: engine.ProblemRequiresAPI,
+		}
 	}
 	if s.APITestConsumers && !tests {
-		return engine.Config{}, errors.New("api-test-consumers requires tests: the masked view is all it speaks to")
+		return engine.Config{}, &engine.ConfigError{
+			Setting: engine.SettingAPITestConsumers, Problem: engine.ProblemRequiresTests,
+		}
 	}
 
 	return engine.Config{
@@ -209,7 +188,7 @@ func configFrom(s Settings) (engine.Config, error) {
 		APIExempt:        exempts,
 		APIGenerics:      generics,
 		APITestConsumers: s.APITestConsumers,
-		VocabularyNames:  s.VocabularyNames,
+		EnumNames:        s.EnumNames,
 		TestFacing:       s.TestFacing,
 		Roots:            s.Roots,
 	}, nil
@@ -222,7 +201,7 @@ func configFrom(s Settings) (engine.Config, error) {
 func exemptions(s Settings) ([]engine.Kind, error) {
 	if len(s.API) == 0 {
 		if s.APIExempt != nil {
-			return nil, errors.New("api-exempt requires api")
+			return nil, &engine.ConfigError{Setting: engine.SettingAPIExempt, Problem: engine.ProblemRequiresAPI}
 		}
 		return nil, nil
 	}
@@ -232,9 +211,9 @@ func exemptions(s Settings) ([]engine.Kind, error) {
 
 	exempts := make([]engine.Kind, 0, len(s.APIExempt))
 	for _, name := range s.APIExempt {
-		kind := engine.Kind(name)
-		if !slices.Contains(engine.Kinds(), kind) {
-			return nil, fmt.Errorf("unknown api-exempt %q: want one of %s", name, kindNames())
+		kind, ok := engine.ParseKind(name)
+		if !ok {
+			return nil, &engine.ConfigError{Setting: engine.SettingAPIExempt, Problem: engine.ProblemUnknownValue, Value: name}
 		}
 		exempts = append(exempts, kind)
 	}
@@ -247,51 +226,16 @@ func exemptions(s Settings) ([]engine.Kind, error) {
 // a setting that quietly roots nothing.
 func genericRooting(s Settings) (engine.GenericRooting, error) {
 	if s.APIGenerics == nil {
-		return "", nil
+		return 0, nil
 	}
 	if len(s.API) == 0 {
-		return "", errors.New("api-generics requires api")
+		return 0, &engine.ConfigError{Setting: engine.SettingAPIGenerics, Problem: engine.ProblemRequiresAPI}
 	}
-	rooting := engine.GenericRooting(*s.APIGenerics)
-	if !slices.Contains(engine.GenericRootings(), rooting) {
-		return "", fmt.Errorf("unknown api-generics %q: want one of %s", *s.APIGenerics, rootingNames())
+	rooting, ok := engine.ParseGenericRooting(*s.APIGenerics)
+	if !ok {
+		return 0, &engine.ConfigError{
+			Setting: engine.SettingAPIGenerics, Problem: engine.ProblemUnknownValue, Value: *s.APIGenerics,
+		}
 	}
 	return rooting, nil
-}
-
-func rootingNames() string {
-	names := make([]string, 0, len(engine.GenericRootings()))
-	for _, rooting := range engine.GenericRootings() {
-		names = append(names, string(rooting))
-	}
-	return strings.Join(names, ", ")
-}
-
-func kindNames() string {
-	names := make([]string, 0, len(engine.Kinds()))
-	for _, kind := range engine.Kinds() {
-		names = append(names, string(kind))
-	}
-	return strings.Join(names, ", ")
-}
-
-// moduleRoot walks up from the working directory to the nearest go.mod, so
-// the analysis covers the whole module however deep golangci-lint was invoked.
-// A subdirectory would otherwise miss the module's main packages and report
-// everything they alone reach as dead.
-func moduleRoot() (string, error) {
-	dir, err := os.Getwd()
-	if err != nil {
-		return "", fmt.Errorf("getting working directory: %w", err)
-	}
-	for {
-		if info, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil && !info.IsDir() {
-			return dir, nil
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return "", fmt.Errorf("no go.mod at or above %s", dir)
-		}
-		dir = parent
-	}
 }

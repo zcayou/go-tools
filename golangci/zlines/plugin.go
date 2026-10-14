@@ -1,7 +1,6 @@
 package zlines
 
 import (
-	"fmt"
 	"slices"
 
 	"github.com/golangci/plugin-module-register/register"
@@ -177,32 +176,37 @@ var _ register.LinterPlugin = (*Plugin)(nil)
 func New(settings any) (register.LinterPlugin, error) {
 	s, err := register.DecodeSettings[Settings](settings)
 	if err != nil {
-		return nil, fmt.Errorf("%s: decoding settings: %w", Name, err)
+		return nil, &ConfigError{Problem: ProblemUndecodable, cause: err}
 	}
 	// A limit of zero or less is a mistake rather than a way to turn a rule off,
 	// which is what the rule's own key is for.
-	if s.LineLength != nil && *s.LineLength <= 0 {
-		return nil, fmt.Errorf("%s: line-length must be positive, got %d", Name, *s.LineLength)
-	}
-	if s.CommentLength != nil && *s.CommentLength <= 0 {
-		return nil, fmt.Errorf("%s: comment-length must be positive, got %d", Name, *s.CommentLength)
-	}
-	if s.CommentMinLength != nil && *s.CommentMinLength <= 0 {
-		return nil, fmt.Errorf("%s: comment-min-length must be positive, got %d", Name, *s.CommentMinLength)
+	for _, length := range []struct {
+		setting Setting
+		value   *int
+	}{
+		{SettingLineLength, s.LineLength},
+		{SettingCommentLength, s.CommentLength},
+		{SettingCommentMinLength, s.CommentMinLength},
+	} {
+		if length.value != nil && *length.value <= 0 {
+			return nil, &ConfigError{Setting: length.setting, Problem: ProblemNotPositive, Value: *length.value}
+		}
 	}
 	// A minimum past the length is a band no paragraph could sit inside.
 	if s.CommentMinLength != nil && *s.CommentMinLength > s.commentLength() {
-		return nil, fmt.Errorf("%s: comment-min-length %d exceeds comment-length %d",
-			Name, *s.CommentMinLength, s.commentLength())
+		return nil, &ConfigError{
+			Setting: SettingCommentMinLength, Problem: ProblemMinimumPastLength,
+			Value: *s.CommentMinLength, Limit: s.commentLength(),
+		}
 	}
 	// A negative overrun would report a lone line the fill itself writes.
 	if s.CommentOverrun != nil && *s.CommentOverrun < 0 {
-		return nil, fmt.Errorf("%s: comment-overrun must not be negative, got %d", Name, *s.CommentOverrun)
+		return nil, &ConfigError{Setting: SettingCommentOverrun, Problem: ProblemNegative, Value: *s.CommentOverrun}
 	}
 	// Every string opens with the empty prefix, so listing it would exempt every
 	// comment there is and leave comment-wrap enforced but silent.
 	if slices.Contains(s.CommentExempt, "") {
-		return nil, fmt.Errorf("%s: comment-exempt must not hold an empty prefix", Name)
+		return nil, &ConfigError{Setting: SettingCommentExempt, Problem: ProblemEmptyPrefix}
 	}
 
 	return &Plugin{settings: s}, nil

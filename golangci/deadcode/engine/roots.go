@@ -52,11 +52,10 @@ func synthesizedPackage(path string) bool {
 func loadRootPrograms(dir string, patterns []string) ([]rootProgram, map[string][]byte, error) {
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
-		return nil, nil, fmt.Errorf("resolving %s: %w", dir, err)
+		return nil, nil, &ConfigError{Setting: SettingRoots, Problem: ProblemUnresolvable, Value: dir, cause: err}
 	}
 	if _, err := os.Stat(filepath.Join(absDir, rootsDir)); err == nil {
-		return nil, nil, fmt.Errorf("%s exists in %s: the directory is reserved for synthesized root programs",
-			rootsDir, dir)
+		return nil, nil, &ConfigError{Setting: SettingRoots, Problem: ProblemReservedDirectory, Value: dir}
 	}
 
 	var files []string
@@ -64,10 +63,10 @@ func loadRootPrograms(dir string, patterns []string) ([]rootProgram, map[string]
 	for _, pattern := range patterns {
 		matches, err := filepath.Glob(filepath.Join(absDir, pattern))
 		if err != nil {
-			return nil, nil, fmt.Errorf("resolving roots pattern %q: %w", pattern, err)
+			return nil, nil, &ConfigError{Setting: SettingRoots, Problem: ProblemUnresolvable, Value: pattern, cause: err}
 		}
 		if len(matches) == 0 {
-			return nil, nil, fmt.Errorf("roots pattern %q matched no files", pattern)
+			return nil, nil, &ConfigError{Setting: SettingRoots, Problem: ProblemMatchesNothing, Value: pattern}
 		}
 		for _, match := range matches {
 			if !seen[match] {
@@ -86,7 +85,7 @@ func loadRootPrograms(dir string, patterns []string) ([]rootProgram, map[string]
 		}
 		src, err := os.ReadFile(file) //nolint:gosec // the path is a file the configuration declared, inside the analyzed module
 		if err != nil {
-			return nil, nil, fmt.Errorf("reading root program: %w", err)
+			return nil, nil, &ConfigError{Setting: SettingRoots, Problem: ProblemUnreadable, Value: source, cause: err}
 		}
 		patched := neutralizeConstraints(src)
 		if err := checkMainClause(source, patched); err != nil {
@@ -133,10 +132,10 @@ func neutralizeConstraints(src []byte) []byte {
 func checkMainClause(name string, src []byte) error {
 	file, err := parser.ParseFile(token.NewFileSet(), name, src, parser.PackageClauseOnly)
 	if err != nil {
-		return fmt.Errorf("reading root program: %w", err)
+		return &ConfigError{Setting: SettingRoots, Problem: ProblemUnreadable, Value: name, cause: err}
 	}
 	if file.Name.Name != "main" {
-		return fmt.Errorf("root program %s declares package %s, not main", name, file.Name.Name)
+		return &ConfigError{Setting: SettingRoots, Problem: ProblemNotMain, Value: name, Package: file.Name.Name}
 	}
 	return nil
 }
@@ -163,7 +162,7 @@ func validateRootPrograms(pkgs []*packages.Package, programs []rootProgram) erro
 				name = source
 			}
 		}
-		return fmt.Errorf("root program %s declares no func main", name)
+		return &ConfigError{Setting: SettingRoots, Problem: ProblemNoMain, Value: name}
 	}
 	return nil
 }

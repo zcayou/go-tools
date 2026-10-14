@@ -44,6 +44,9 @@ linters:
     - deadcode
     - testlayout
     - zlines
+    - zerrors
+    - zenum
+    - zassert
 
   settings:
     custom:
@@ -67,6 +70,18 @@ linters:
       zlines:
         type: module
         description: Reports line breaks the line-length limit does not call for.
+        original-url: github.com/zcayou/go-tools
+      zerrors:
+        type: module
+        description: Reports errors a caller cannot tell apart, and decisions made on error text.
+        original-url: github.com/zcayou/go-tools
+      zenum:
+        type: module
+        description: Reports enums that are not ordinal, named, or the only way to make their values.
+        original-url: github.com/zcayou/go-tools
+      zassert:
+        type: module
+        description: Reports specs that assert an error occurred without saying which, or that assert its text.
         original-url: github.com/zcayou/go-tools
 
     depguard:

@@ -1,0 +1,72 @@
+package engine_test
+
+import (
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+
+	"github.com/zcayou/go-tools/golangci/zerrors/engine"
+)
+
+var _ = Describe("Following an error through module code", func() {
+	It("follows helpers, closed interfaces, error fields and closures, and leaves open interfaces unjudged", func() {
+		// Clean, Fetch, Settle and the recursive call draw nothing: a helper
+		// passing on a structured argument, an open interface's call, an error
+		// field only ever stored with a structured value, and a judged function
+		// calling itself, which carries its own finding.
+		Expect(analyze("followed", engine.Config{Sentinels: true}, engine.RuleUnstructuredReturn)).To(ConsistOf(
+			"followed.go:17: unstructured-return: Open can return an unstructured error: fmt.Errorf in readManifest",
+			"followed.go:21: unstructured-return: Wrapped can return an unstructured error: io.EOF",
+			"followed.go:42: unstructured-return: Get can return an unstructured error: errors.New in memory.get",
+			"followed.go:49: unstructured-return: Close can return an unstructured error: os.File.Close",
+			"followed.go:63: unstructured-return: Run can return an unstructured error: os.Remove in run",
+			"followed.go:74: unstructured-return: Recursive can return an unstructured error: errors.New in countdown",
+			"followed.go:88: unstructured-return: Immediate can return an unstructured error: io.EOF",
+		))
+	})
+
+	It("resolves what a closure captures per call, through any nesting", func() {
+		// CaptureNameable shares capture with CaptureRaw, whose raw argument is its
+		// own: a closure's captured parameter is the call's argument.
+		Expect(analyze("flow", engine.Config{}, engine.RuleUnstructuredReturn)).To(ContainElements(
+			"flow.go:21: unstructured-return: CaptureRaw can return an unstructured error: io.EOF",
+			"flow.go:27: unstructured-return: Nested can return an unstructured error: io.ErrUnexpectedEOF",
+		))
+		Expect(analyze("flow", engine.Config{}, engine.RuleUnstructuredReturn)).NotTo(ContainElement(
+			ContainSubstring("CaptureNameable")))
+	})
+
+	It("reports a return inside a range-over-func loop where it is, and no other return", func() {
+		found := analyze("flow", engine.Config{}, engine.RuleUnstructuredReturn)
+
+		Expect(found).To(ContainElement(
+			"flow.go:33: unstructured-return: Ranged can return an unstructured error: errors.New"))
+		Expect(found).NotTo(ContainElement(HavePrefix("flow.go:36:")))
+	})
+
+	It("follows a wrapping of parameters per call, and weighs a nil operand as nothing", func() {
+		// Service.Run waits on a group a callback was handed through the same
+		// field. JoinParameter wraps its caller's own error, and Save and Annotated
+		// hand a helper wrapping its parameter a nameable one. Checked wraps
+		// an error that is nil or nameable once it is not nil. Cleanup joins a nil
+		// result with a raw one, and JoinNil a nil with a raw one.
+		Expect(analyze("flow", engine.Config{}, engine.RuleUnstructuredReturn)).To(ConsistOf(
+			"flow.go:21: unstructured-return: CaptureRaw can return an unstructured error: io.EOF",
+			"flow.go:27: unstructured-return: Nested can return an unstructured error: io.ErrUnexpectedEOF",
+			"flow.go:33: unstructured-return: Ranged can return an unstructured error: errors.New",
+			"flow.go:57: unstructured-return: AnnotatedRaw can return an unstructured error: fmt.Errorf in annotate",
+			"flow.go:61: unstructured-return: Cleanup can return an unstructured error: errors.Join",
+			"flow.go:64: unstructured-return: JoinNil can return an unstructured error: errors.Join",
+		))
+	})
+
+	It("does not follow a cause slot, whose value was judged where it was made", func() {
+		// encode stores a raw cause into one Error, Lookup a nameable one into
+		// another. Cause returns a loaded cause and Rewrapped wraps one alone,
+		// and both draw nothing; Joined joins one with a raw error, which the cause
+		// does not structure. Released joins two errors that can be a cause,
+		// nameable or nil, which are structured.
+		Expect(analyze("causes", engine.Config{}, engine.RuleUnstructuredReturn)).To(ConsistOf(
+			"causes.go:30: unstructured-return: Joined can return an unstructured error: errors.Join",
+		))
+	})
+})

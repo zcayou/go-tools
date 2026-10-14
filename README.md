@@ -16,9 +16,13 @@ existing CI wiring apply unchanged.
 | `testlayout` | Test files follow the repository's test-suite layout conventions. | |
 | `deadcode` | Code that nothing can reach, by whole-program call-graph analysis. | |
 | `zlines` | Line breaks a declaration or comment should not have, and line breaks it should. | `--fix` |
+| `zerrors` | Errors a caller cannot tell apart, decisions on error text, and error fields that should be enums. | |
+| `zenum` | Enums that are not ordinal, unnamed, ambiguously named, or made by conversion. | |
+| `zassert` | Specs that assert an error occurred without saying which, or assert an error's text or an enum's token outside the spec that pins it. | |
 
-Each linter's package doc — [testlayout], [deadcode], [zlines] — is the full
-reference for its rules; the sections below cover configuration.
+Each linter's package doc — [testlayout], [deadcode], [zlines], [zerrors],
+[zenum], [zassert] — is the full reference for its rules; the sections below
+cover configuration.
 
 ### testlayout
 
@@ -125,7 +129,7 @@ linters:
           api-exempt: [method]     # default when api is set; [] exempts nothing
           api-generics: instantiated  # default when api is set; skip roots none of it
           api-test-consumers: true # api packages' tests stand in for their consumers
-          vocabulary-names: true   # a closed vocabulary's String is its published name
+          enum-names: true   # an enum's String is its published name
           test-facing: ['./plugins/test/...']  # packages whose intended consumers are tests
           roots: ['tools/*.go']    # entry-point files the load cannot reach
 ```
@@ -151,7 +155,7 @@ An exported `type X = p.Y` (instantiated or not) or `const X = p.Y` of the same
 type in an `api` package, naming a declaration another `api` package makes,
 draws no verdict of its own: every reference to it counts for `p.Y`, following
 a chain of copies to its end, and its own right-hand side does not. So a facade
-renaming the module's vocabulary is not reported name by name because the
+renaming the module's enum is not reported name by name because the
 module's own code spells the owner, and a dead `p.Y` cannot hide behind a copy
 of it — it is reported where it is declared, in its `test-only` form when only
 a test spells any of its names. A conversion, a second name within one package,
@@ -272,8 +276,10 @@ the surface that only tests keep alive still draws the family, and an exported
 `api` declaration nothing references, tests included, is still reported. It
 requires `api` and `tests: true`.
 
-`vocabulary-names` credits a closed vocabulary's published name. A named type
-whose own package declares typed constants of it is a vocabulary, and a
+`enum-names` credits an enum's published name. A closed
+enum, as `internal/enum` defines it for every linter here — a
+non-generic named type whose own package declares typed constants of it, flag
+sets and quantities excepted — is an enum, and a
 `String() string` method on a value receiver is its name: it counts as used,
 and what it calls stays live, whether or not production ever renders a member.
 That is a repository's convention — one name per member, rendered or not —
@@ -298,6 +304,120 @@ Two settings that need care:
   `patterns` shrinks what gets loaded, which invents dead code: a package
   dropped from the analysis stops being a use of anything. Declare the package
   `test-facing` instead.
+
+### zerrors
+
+Holds a module's errors to two principles: an error that leaves the API can be
+told apart by its caller, through a type or sentinel it can name, and nothing
+decides on an error's text. Like deadcode it analyzes the whole module once per
+invocation from its own typed load — module source, dependencies from export
+data, no tests — so it re-runs every time; zenum shares that load when both are
+enabled with the same build tags.
+
+```yaml
+linters:
+  settings:
+    custom:
+      zerrors:
+        type: module
+        settings:
+          api: ['./pkg/...']        # absent means ./...; main and internal packages are never API
+          trusted: ['example.com/framework/...']  # packages whose errors count as structured
+          protocols:                # interface methods whose implementations may return raw errors
+            - {method: example.com/framework/lane.Acquirer.Acquire, reason: the lane classifies them}
+          sentinels: true           # default; false requires error types rather than variables
+          base: example.com/framework/contract.Classification  # every error type carries it
+          base-packages: ['./pkg/...', './internal/...']        # absent means ./...; where base applies
+          build-tags: [integration]
+```
+
+`unstructured-return` judges what a caller outside the module calls: exported
+functions and methods of API packages, implementations of their exported
+interfaces, and implementations the module hands to a `trusted` framework.
+`text-decision` reports a branch on `Error()` or on an error type's `string`
+field, anywhere. `literal-field` reports an error type's `string` field that
+only ever holds constants, which wants an enum type, or, when it only ever holds
+one value, carries no information and wants removing. `missing-base`, only
+while `base` is set, reports an error type that does not carry it, in the
+packages `base-packages` matches: code that stays outside the framework on
+purpose is left out there rather than through exclusions. Unlike `api`, its
+patterns match `internal` and `main` packages too.
+
+A `trusted`, `protocols` or `base` entry that matches nothing, and an `api` or
+`base-packages` pattern matching no package it could mean, fail the run rather
+than meaning nothing.
+
+### zenum
+
+Holds enums — a defined, non-generic integer or string type whose own package
+declares constants of it — to being ordinal, naming each member once through a
+readable `String`, keeping zero out of the members, and being the only way to
+make their values. A type whose constants are declared by a `<<` shift (a flag
+set) or by multiplying another of its constants (a quantity) is no enum, and an
+unexported constant that closes an iota run and serves as an array length or
+ordering bound (a count sentinel) is no member. It shares zerrors's whole-module
+load.
+
+```yaml
+linters:
+  settings:
+    custom:
+      zenum:
+        type: module
+        settings:
+          open-enums:               # values come from outside the module: no zenum rule applies
+            - {type: example.com/m/wire.ID, reason: IDs come from the wire}
+          zero-defaults:            # zero is the documented default member
+            - {type: example.com/m/sync.Strategy, reason: zero means merge}
+          related-enums:            # tokens overlap because they classify different things
+            - {first: example.com/m/a.State, second: example.com/m/b.Phase, reason: phases mirror states}
+          build-tags: [integration]
+```
+
+The rules are `string-enum`, `unnamed`, `unreadable-name`,
+`ambiguous-name`, `zero-member`, `restated`, `token-decision`,
+`forged-conversion` and `numeric-verb`. A `String` is read rather than run, in
+the forms people write and the three layouts `stringer` generates; a member's
+token is a string reached for its value specifically — read from a table by the
+receiver, or inside a branch an equality on the receiver entered — and a
+fallback gives none. Each entry
+is a property of the type, applied wherever it is used, and needs a reason; an
+entry that suppresses nothing fails the run. A one-off goes through
+`//nolint:zenum` or an exclusion.
+
+### zassert
+
+Holds Ginkgo/Gomega and testify specs to asserting which error they got, and
+which enum member. It judges test files only, so it needs golangci-lint's
+`run.tests`, the default. It is typed: an enum is known by a fact the pass over
+its declaring package exports, so golangci-lint analyzes dependencies from
+source and caches the facts, as it already does for govet.
+
+```yaml
+linters:
+  settings:
+    custom:
+      zassert:
+        type: module
+        settings:
+          api: ['./pkg/...']                    # give zerrors and zassert the same list
+          build-tags: [integration]             # the tags the api patterns resolve under
+          rendering-patterns: ['<source>_test.go']  # default; [] means no file pins a rendering
+```
+
+`unidentified-error` reports `HaveOccurred()`, a negated `Succeed()`, a negated
+`BeNil()` on an error, and testify's `Error` and `NotNil` on an error, in the
+specs of API packages. `text-assertion` reports an assertion on an error's
+text — `MatchError` given text or an error built with `errors.New` or
+`fmt.Errorf`, `Expect(err.Error())` or a variable holding it, `EqualError`,
+`ErrorContains` and the like — except in the spec file that pins a rendering:
+one a `rendering-patterns` entry names for a source declaring `Error() string`.
+`token-assertion` reports an assertion on an enum's rendering —
+`Expect(s.String())`, `string(s)` of a string enum, `fmt.Sprint(s)`,
+`HaveField("State.String()", …)`, testify's `Equal` of one — except in the spec
+file a `rendering-patterns` entry names for the file declaring the enum or its
+`String`. Only enums declared in the module are judged. A negated assertion is
+exempt from both, and so is a text assertion on `errors.Unwrap(err)`.
 
 ## Usage
 
@@ -372,9 +492,9 @@ binary, so the two cannot drift.
 
 Suites are Ginkgo/Gomega, with analyzer fixtures under
 `golangci/<name>/testdata/` driven by `analysistest`. Run them from a checkout:
-the deadcode engine's fixtures are whole modules, and module-zip creation drops
-directories containing a `go.mod`, so a copy fetched through a Go proxy is
-missing them.
+the fixtures of the whole-module linters and their engines are whole modules,
+and module-zip creation drops directories containing a `go.mod`, so a copy
+fetched through a Go proxy is missing them.
 
 ## License
 
@@ -383,3 +503,6 @@ Copyright 2026 Zachary Cayou. [Apache License 2.0](LICENSE).
 [testlayout]: https://pkg.go.dev/github.com/zcayou/go-tools/golangci/testlayout
 [deadcode]: https://pkg.go.dev/github.com/zcayou/go-tools/golangci/deadcode
 [zlines]: https://pkg.go.dev/github.com/zcayou/go-tools/golangci/zlines
+[zerrors]: https://pkg.go.dev/github.com/zcayou/go-tools/golangci/zerrors
+[zenum]: https://pkg.go.dev/github.com/zcayou/go-tools/golangci/zenum
+[zassert]: https://pkg.go.dev/github.com/zcayou/go-tools/golangci/zassert

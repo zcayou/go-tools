@@ -92,9 +92,10 @@
 // test evidence aimed at the declared surface counts as production evidence
 // would, and test evidence aimed anywhere else stays masked.
 //
-// vocabulary-names states a convention instead: each closed vocabulary —
-// a named type its own package declares typed constants of — publishes a name
-// per member through a String method, used or not.
+// enum-names states a convention instead: each enum — a named type its own
+// package declares typed constants of, other than a flag set, a quantity
+// or a generic type, as internal/enum defines them — publishes a name per
+// member through a String method, used or not.
 //
 // An absent key and an empty list mean different things. Omitting patterns
 // analyzes the whole module; writing patterns: [] names no packages at all

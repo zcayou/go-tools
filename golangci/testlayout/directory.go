@@ -4,13 +4,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
+
+	"github.com/zcayou/go-tools/golangci/internal/filepattern"
 )
 
 // directory is the on-disk view of one package directory: the source files
-// a [sourceToken] pattern resolves against, whether they leave anything
-// to test, and the name of every test file sitting in it.
+// a [filepattern.SourceToken] pattern resolves against, whether they leave
+// anything to test, and the name of every test file sitting in it.
 //
 // It is read from disk rather than taken from the pass because a pass holds one
 // test package. A directory's internal and external test packages are separate
@@ -18,7 +19,7 @@ import (
 // an adapter exists at all means looking wider than a pass can see.
 type directory struct {
 	path    string
-	sources sources
+	sources filepattern.Sources
 
 	// standalone reports that the directory holds no source to test: every file
 	// in sources declares nothing, as a doc.go does. A test file there
@@ -52,7 +53,7 @@ func readDirectory(path string) (directory, error) {
 		}
 	}
 
-	standalone, err := dir.sources.declareNothing(path)
+	standalone, err := declareNothing(path, dir.sources)
 	if err != nil {
 		return directory{}, err
 	}
@@ -60,27 +61,15 @@ func readDirectory(path string) (directory, error) {
 	return dir, nil
 }
 
-// sources are the names of the files in one directory that are not test files.
-type sources []string
-
-// declares reports whether a source file named base sits in the directory.
-// A build-constrained variant counts: platform_linux.go is the source
-// platform_test.go exercises, so a split source is not read as a missing one.
-func (s sources) declares(base string) bool {
-	return slices.ContainsFunc(s, func(name string) bool {
-		return name == base+".go" || isBuildVariant(name, base)
-	})
-}
-
-// declareNothing reports whether no source file in the directory at path holds
-// a declaration, which is what leaves nothing to test. A doc.go carrying only
-// a package clause declares nothing. A file carrying only an import does not
-// count as nothing: a side-effect import makes the package do something,
+// declareNothing reports whether no file of srcs, in the directory at path,
+// holds a declaration, which is what leaves nothing to test. A doc.go carrying
+// only a package clause declares nothing. A file carrying only an import does
+// not count as nothing: a side-effect import makes the package do something,
 // and a package that does something is a package under test. The walk stops
-// at the first file that declares, so a directory with real sources costs
-// one parse.
-func (s sources) declareNothing(path string) (bool, error) {
-	for _, name := range s {
+// at the first file that declares, so a directory with real sources costs one
+// parse.
+func declareNothing(path string, srcs filepattern.Sources) (bool, error) {
+	for _, name := range srcs {
 		file, err := parsePath(filepath.Join(path, name))
 		if err != nil {
 			return false, err
@@ -90,44 +79,4 @@ func (s sources) declareNothing(path string) (bool, error) {
 		}
 	}
 	return true, nil
-}
-
-// isBuildVariant reports whether name is base under a platform file-name
-// suffix: a GOOS or GOARCH constraint, the implicit build tag go/build reads
-// out of a name, or _unix. go/build reads no constraint out of _unix, but
-// it is how the unix side of a source split along the unix build tag is named,
-// and the test for that source is named for the source all the same.
-func isBuildVariant(name, base string) bool {
-	rest, ok := strings.CutPrefix(name, base+"_")
-	if !ok {
-		return false
-	}
-	if rest, ok = strings.CutSuffix(rest, ".go"); !ok {
-		return false
-	}
-	if goosValues[rest] || goarchValues[rest] {
-		return true
-	}
-	goos, goarch, ok := strings.Cut(rest, "_")
-	return ok && goosValues[goos] && goarchValues[goarch]
-}
-
-// goosValues and goarchValues are the values go/build recognizes
-// in the trailing element of a file name, which is where the constraint a name
-// carries comes from. They are copied from the toolchain's internal/syslist,
-// which nothing exported carries, and goosValues adds unix for the reason
-// [isBuildVariant] gives.
-var goosValues = map[string]bool{
-	"aix": true, "android": true, "darwin": true, "dragonfly": true, "freebsd": true, "hurd": true,
-	"illumos": true, "ios": true, "js": true, "linux": true, "nacl": true, "netbsd": true,
-	"openbsd": true, "plan9": true, "solaris": true, "unix": true, "wasip1": true, "windows": true,
-	"zos": true,
-}
-
-var goarchValues = map[string]bool{
-	"386": true, "amd64": true, "amd64p32": true, "arm": true, "armbe": true, "arm64": true,
-	"arm64be": true, "loong64": true, "mips": true, "mipsle": true, "mips64": true, "mips64le": true,
-	"mips64p32": true, "mips64p32le": true, "ppc": true, "ppc64": true, "ppc64le": true,
-	"riscv": true, "riscv64": true, "s390": true, "s390x": true, "sparc": true, "sparc64": true,
-	"wasm": true,
 }

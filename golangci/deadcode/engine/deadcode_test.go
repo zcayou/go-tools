@@ -9,9 +9,41 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/onsi/gomega/types"
 
 	"github.com/zcayou/go-tools/golangci/deadcode/engine"
 )
+
+var _ = Describe("Enums", func() {
+	It("names each kind, and parses a name back", func() {
+		for _, kind := range engine.Kinds() {
+			parsed, ok := engine.ParseKind(kind.String())
+			Expect(ok).To(BeTrue())
+			Expect(parsed).To(Equal(kind))
+		}
+		Expect(engine.KindInterfaceMethod.String()).To(Equal("interface-method"))
+		_, ok := engine.ParseKind("methods")
+		Expect(ok).To(BeFalse())
+	})
+
+	It("names each generic rooting, and parses a name back", func() {
+		Expect([]string{engine.GenericRootingSkip.String(), engine.GenericRootingInstantiated.String()}).
+			To(Equal([]string{"skip", "instantiated"}))
+		parsed, ok := engine.ParseGenericRooting("instantiated")
+		Expect(ok).To(BeTrue())
+		Expect(parsed).To(Equal(engine.GenericRootingInstantiated))
+		_, ok = engine.ParseGenericRooting("monomorphized")
+		Expect(ok).To(BeFalse())
+	})
+
+	It("reports a finding under its verdict, prefixed in the test-only family", func() {
+		finding := engine.Finding{Verdict: engine.VerdictUnusedFunc}
+		Expect(finding.Category()).To(Equal("unused exported func"))
+
+		finding.TestOnly = true
+		Expect(finding.Category()).To(Equal("test-only unused exported func"))
+	})
+})
 
 // Each fixture under testdata is its own module holding one program that uses
 // nothing but the standard library, so a run needs no network and the analysis
@@ -387,7 +419,7 @@ var _ = Describe("Analyze", func() {
 				TestFacing: []string{"./kit"},
 			})
 
-			Expect(err).To(MatchError(ContainSubstring("test-facing requires tests")))
+			Expect(err).To(MatchError(&engine.ConfigError{Setting: engine.SettingTestFacing, Problem: engine.ProblemRequiresTests}))
 		})
 
 		It("rejects a test-facing pattern that resolves to nothing", func(ctx SpecContext) {
@@ -398,7 +430,7 @@ var _ = Describe("Analyze", func() {
 				TestFacing: []string{"./nope"},
 			})
 
-			Expect(err).To(MatchError(ContainSubstring("resolving test-facing pattern ./nope")))
+			Expect(err).To(beConfigError(engine.SettingTestFacing, engine.ProblemUnresolvable, "./nope"))
 		})
 
 		It("rejects a package declared both api and test-facing", func(ctx SpecContext) {
@@ -411,7 +443,9 @@ var _ = Describe("Analyze", func() {
 				TestFacing: []string{"./kit"},
 			})
 
-			Expect(err).To(MatchError(ContainSubstring("declared both api and test-facing: testfacing/kit")))
+			Expect(err).To(MatchError(&engine.ConfigError{
+				Setting: engine.SettingTestFacing, Problem: engine.ProblemOverlapsAPI, Packages: []string{"testfacing/kit"},
+			}))
 		})
 	})
 
@@ -463,7 +497,9 @@ var _ = Describe("Analyze", func() {
 				Roots:    []string{"tools/nope.go"},
 			})
 
-			Expect(err).To(MatchError(ContainSubstring(`roots pattern "tools/nope.go" matched no files`)))
+			Expect(err).To(MatchError(&engine.ConfigError{
+				Setting: engine.SettingRoots, Problem: engine.ProblemMatchesNothing, Value: "tools/nope.go",
+			}))
 		})
 
 		It("rejects a roots glob matching nothing", func(ctx SpecContext) {
@@ -473,7 +509,9 @@ var _ = Describe("Analyze", func() {
 				Roots:    []string{"gen/*.go"},
 			})
 
-			Expect(err).To(MatchError(ContainSubstring(`roots pattern "gen/*.go" matched no files`)))
+			Expect(err).To(MatchError(&engine.ConfigError{
+				Setting: engine.SettingRoots, Problem: engine.ProblemMatchesNothing, Value: "gen/*.go",
+			}))
 		})
 
 		It("rejects a declared file that is not a main program", func(ctx SpecContext) {
@@ -483,7 +521,9 @@ var _ = Describe("Analyze", func() {
 				Roots:    []string{"lib/lib.go"},
 			})
 
-			Expect(err).To(MatchError(ContainSubstring("root program lib/lib.go declares package lib, not main")))
+			Expect(err).To(MatchError(&engine.ConfigError{
+				Setting: engine.SettingRoots, Problem: engine.ProblemNotMain, Value: "lib/lib.go", Package: "lib",
+			}))
 		})
 
 		It("rejects a root program with no func main", func(ctx SpecContext) {
@@ -496,7 +536,9 @@ var _ = Describe("Analyze", func() {
 				Roots:    []string{"partial/prog.go"},
 			})
 
-			Expect(err).To(MatchError(ContainSubstring("root program partial/prog.go declares no func main")))
+			Expect(err).To(MatchError(&engine.ConfigError{
+				Setting: engine.SettingRoots, Problem: engine.ProblemNoMain, Value: "partial/prog.go",
+			}))
 		})
 
 		It("refuses to run while the reserved directory exists on disk", func(ctx SpecContext) {
@@ -510,7 +552,9 @@ var _ = Describe("Analyze", func() {
 				Roots:    []string{"tools/*.go"},
 			})
 
-			Expect(err).To(MatchError(ContainSubstring("reserved for synthesized root programs")))
+			Expect(err).To(MatchError(&engine.ConfigError{
+				Setting: engine.SettingRoots, Problem: engine.ProblemReservedDirectory, Value: fixtureDir("declaredroots"),
+			}))
 		})
 	})
 
@@ -532,11 +576,11 @@ var _ = Describe("Analyze", func() {
 		Expect(findings[0].Name).To(Equal("Gauge.Read"))
 	})
 
-	Describe("published vocabulary names", func() {
+	Describe("published enum names", func() {
 		// Production compares every member and renders none, so each String is dead
 		// on the program's evidence alone.
 		It("reports every String while the setting is off", func(ctx SpecContext) {
-			Expect(analyzeWith(ctx, "vocabularynames", engine.Config{})).To(Equal([]string{
+			Expect(analyzeWith(ctx, "enumnames", engine.Config{})).To(Equal([]string{
 				"main.go:13:16: unreachable func: Phase.String",
 				"main.go:15:6: unreachable func: phaseNames",
 				"main.go:18:16: unreachable func: Phase.Terminal",
@@ -549,11 +593,11 @@ var _ = Describe("Analyze", func() {
 			}))
 		})
 
-		It("credits a vocabulary's published name and nothing else", func(ctx SpecContext) {
+		It("credits an enum's published name and nothing else", func(ctx SpecContext) {
 			// Phase's String is its name, and it is a root, so phaseNames lives with it.
-			// Terminal is another method of the vocabulary, Label declares no member,
+			// Terminal is another method of the enum, Label declares no member,
 			// and Level's String takes a pointer receiver: each is judged as ever.
-			Expect(analyzeWith(ctx, "vocabularynames", engine.Config{VocabularyNames: true})).To(Equal([]string{
+			Expect(analyzeWith(ctx, "enumnames", engine.Config{EnumNames: true})).To(Equal([]string{
 				"main.go:18:16: unreachable func: Phase.Terminal",
 				"main.go:23:16: unreachable func: Label.String",
 				"main.go:31:17: unreachable func: Level.String",
@@ -567,7 +611,7 @@ var _ = Describe("Analyze", func() {
 			// Only tests render Phase, Mode and Level, wherever they are written.
 			// The name is a declaration's fact rather than test evidence, so the family
 			// loses them and keeps the constant only a test spells.
-			Expect(analyzeWith(ctx, "leak", engine.Config{Tests: true, VocabularyNames: true})).To(Equal([]string{
+			Expect(analyzeWith(ctx, "leak", engine.Config{Tests: true, EnumNames: true})).To(Equal([]string{
 				"lib/lib.go:12:2: test-only unused exported const: Start",
 			}))
 		})
@@ -702,21 +746,21 @@ var _ = Describe("Analyze", func() {
 			})
 
 			DescribeTable("rejects the setting with nothing to stand in for",
-				func(ctx SpecContext, cfg engine.Config) {
+				func(ctx SpecContext, cfg engine.Config, problem engine.Problem) {
 					cfg.Dir = fixtureDir("testconsumers")
 					cfg.APITestConsumers = true
 
 					_, err := engine.Analyze(ctx, cfg)
 
-					Expect(err).To(MatchError(ContainSubstring("api test consumers require api patterns and tests")))
+					Expect(err).To(MatchError(&engine.ConfigError{Setting: engine.SettingAPITestConsumers, Problem: problem}))
 				},
-				Entry("no api", engine.Config{Tests: true}),
-				Entry("no tests", engine.Config{API: []string{"./api"}}),
+				Entry("no api", engine.Config{Tests: true}, engine.ProblemRequiresAPI),
+				Entry("no tests", engine.Config{API: []string{"./api"}}, engine.ProblemRequiresTests),
 			)
 		})
 
 		Describe("a re-export", func() {
-			// facade renames owner's vocabulary and outer renames one of facade's copies
+			// facade renames owner's enum and outer renames one of facade's copies
 			// in turn. The program and its test spell only the copies.
 			It("judges a copy as the declaration it renames", func(ctx SpecContext) {
 				Expect(analyzeWith(ctx, "reexport", engine.Config{
@@ -964,7 +1008,7 @@ var _ = Describe("Analyze", func() {
 					APIGenerics: engine.GenericRootingInstantiated,
 				})
 
-				Expect(err).To(MatchError(ContainSubstring("api generic rooting requires api patterns")))
+				Expect(err).To(MatchError(&engine.ConfigError{Setting: engine.SettingAPIGenerics, Problem: engine.ProblemRequiresAPI}))
 			})
 
 			It("rejects an unknown generic rooting", func(ctx SpecContext) {
@@ -972,10 +1016,12 @@ var _ = Describe("Analyze", func() {
 					Dir:         fixtureDir("control"),
 					Patterns:    []string{"./..."},
 					API:         []string{"./..."},
-					APIGenerics: "nonsense",
+					APIGenerics: engine.GenericRooting(99),
 				})
 
-				Expect(err).To(MatchError(ContainSubstring(`unknown api generic rooting "nonsense"`)))
+				Expect(err).To(MatchError(&engine.ConfigError{
+					Setting: engine.SettingAPIGenerics, Problem: engine.ProblemUnknownValue, Value: "GenericRooting(99)",
+				}))
 			})
 		})
 
@@ -1108,7 +1154,7 @@ var _ = Describe("Analyze", func() {
 				APIExempt: []engine.Kind{engine.KindMethod},
 			})
 
-			Expect(err).To(MatchError(ContainSubstring("api exemptions require api patterns")))
+			Expect(err).To(MatchError(&engine.ConfigError{Setting: engine.SettingAPIExempt, Problem: engine.ProblemRequiresAPI}))
 		})
 
 		It("rejects an unknown api exemption", func(ctx SpecContext) {
@@ -1116,10 +1162,12 @@ var _ = Describe("Analyze", func() {
 				Dir:       fixtureDir("control"),
 				Patterns:  []string{"./..."},
 				API:       []string{"./..."},
-				APIExempt: []engine.Kind{"nonsense"},
+				APIExempt: []engine.Kind{engine.Kind(99)},
 			})
 
-			Expect(err).To(MatchError(ContainSubstring(`unknown api exemption "nonsense"`)))
+			Expect(err).To(MatchError(&engine.ConfigError{
+				Setting: engine.SettingAPIExempt, Problem: engine.ProblemUnknownValue, Value: "Kind(99)",
+			}))
 		})
 
 		It("rejects an api pattern that resolves to nothing", func(ctx SpecContext) {
@@ -1132,7 +1180,7 @@ var _ = Describe("Analyze", func() {
 				API:      []string{"./nope"},
 			})
 
-			Expect(err).To(MatchError(ContainSubstring("resolving api pattern ./nope")))
+			Expect(err).To(beConfigError(engine.SettingAPI, engine.ProblemUnresolvable, "./nope"))
 		})
 
 		It("rejects an api pattern that resolves to nothing among ones that do", func(ctx SpecContext) {
@@ -1142,7 +1190,7 @@ var _ = Describe("Analyze", func() {
 				API:      []string{"./...", "./nope/..."},
 			})
 
-			Expect(err).To(MatchError(ContainSubstring("resolving api pattern ./nope/...")))
+			Expect(err).To(beConfigError(engine.SettingAPI, engine.ProblemUnresolvable, "./nope/..."))
 		})
 
 		It("exempts a method on an api package's live type", func(ctx SpecContext) {
@@ -1191,7 +1239,8 @@ var _ = Describe("Analyze", func() {
 				Patterns: []string{"./..."},
 			})
 
-			Expect(err).To(MatchError(ContainSubstring("undefined: undefinedHelper")))
+			Expect(err).To(BeAssignableToTypeOf(&engine.RunError{}))
+			Expect(err).To(HaveField("Stage", engine.StageLoadingPackages))
 		})
 
 		It("refuses to answer past a canceled context", func(ctx SpecContext) {
@@ -1203,7 +1252,8 @@ var _ = Describe("Analyze", func() {
 				Patterns: []string{"./..."},
 			})
 
-			Expect(err).To(MatchError(ContainSubstring("context canceled")))
+			Expect(err).To(BeAssignableToTypeOf(&engine.RunError{}))
+			Expect(err).To(MatchError(context.Canceled))
 		})
 	})
 
@@ -1256,7 +1306,18 @@ func analyzeWith(ctx SpecContext, name string, cfg engine.Config) []string {
 		rel, err := filepath.Rel(dir, finding.Pos.Filename)
 		Expect(err).NotTo(HaveOccurred())
 		reported = append(reported, fmt.Sprintf("%s:%d:%d: %s: %s",
-			rel, finding.Pos.Line, finding.Pos.Column, finding.Verdict, finding.Name))
+			rel, finding.Pos.Line, finding.Pos.Column, finding.Category(), finding.Name))
 	}
 	return reported
+}
+
+// beConfigError matches an [engine.ConfigError] for the setting, problem
+// and value, whatever cause it carries.
+func beConfigError(setting engine.Setting, problem engine.Problem, value string) types.GomegaMatcher {
+	return SatisfyAll(
+		BeAssignableToTypeOf(&engine.ConfigError{}),
+		HaveField("Setting", setting),
+		HaveField("Problem", problem),
+		HaveField("Value", value),
+	)
 }

@@ -1,4 +1,4 @@
-// Package owner declares the vocabulary the other packages rename.
+// Package owner declares the enum the other packages rename.
 package owner
 
 // Mode is the type of the constants below.

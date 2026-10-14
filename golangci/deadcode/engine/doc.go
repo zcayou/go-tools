@@ -121,7 +121,7 @@
 // surface package's type, instantiated or not, and an exported constant whose
 // value is another surface package's constant of the same type add a name
 // rather than a declaration, and the name is for consumers: a module reaches
-// its own vocabulary through the package that owns it, so judged by its own
+// its own enum through the package that owns it, so judged by its own
 // references every such copy reads as unused, and the ones that pass do so
 // because some caller happened to spell them. The copy therefore draws no
 // verdict. A reference to it counts for the declaration at the end of its chain
@@ -326,15 +326,16 @@
 // a test file draws every verdict its declarations earn, which is what pairs
 // a dead contract with the implementations satisfying it.
 //
-// # Published vocabulary names
+// # Published enum names
 //
-// [Config.VocabularyNames] credits a closed vocabulary's name: a String()
-// string method on a value receiver, on a named type whose own package declares
-// typed constants of it, constants in test files aside. The credit
+// [Config.EnumNames] credits an enum's name: a String() string method
+// on a value receiver, on a named type whose own package declares typed
+// constants of it, constants in test files aside, other than a flag set,
+// a quantity or a generic type, as internal/enum defines them. The credit
 // is participation, read by every method verdict, and the name is a root, so
 // what rendering a member calls is live with it. It is a declaration's fact
 // rather than evidence, and holds in both views. Publishing a name per member
-// is a repository's API decision — a vocabulary production compares and never
+// is a repository's API decision — an enum production compares and never
 // renders keeps its name — so the credit is a setting, and reaches nothing else
 // on the type.
 //

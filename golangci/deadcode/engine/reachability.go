@@ -34,10 +34,10 @@ type reachability struct {
 // exists does the whole exported surface stand in, so that a library still
 // analyzes. Functions a //go:linkname directive publishes are added either way
 // — the body runs under a name no source reference mentions, which is what
-// a root is — and so are the credited methods of what the sealed surface
-// holds, whose bodies run from a call RTA cannot see, and the published names
-// a vocabulary credits. None counts toward having roots at all: a program
-// with no entry point runs none of them.
+// a root is — and so are the credited methods of what the sealed surface holds,
+// whose bodies run from a call RTA cannot see, and the published names an enum
+// credits. None counts toward having roots at all: a program with no entry
+// point runs none of them.
 //
 // Under the masked view neither test-variant packages nor declared test-facing
 // packages contribute roots of any kind. The synthesized test main
@@ -52,7 +52,7 @@ func selectRoots(
 	initial []*packages.Package,
 	surface *apiSurface,
 	sealed *sealedSurface,
-	vocab *vocabulary,
+	credit *enumNames,
 	deadTypes map[string]bool,
 	facts map[*packages.Package]fileFacts,
 	tests bool,
@@ -113,7 +113,7 @@ func selectRoots(
 	}
 	concrete, generic := creditedMethods(prog, sealed, participation, v)
 	roots = append(roots, concrete...)
-	roots = append(roots, publishedNames(prog, vocab, v)...)
+	roots = append(roots, publishedNames(prog, credit, v)...)
 	if surface.rootsInstantiations() {
 		reached, more := uninstantiatedRoots(prog, generic, settled)
 		roots = append(roots, reached...)
@@ -178,13 +178,13 @@ func creditedMethods(
 	return concrete, generic
 }
 
-// publishedNames returns the published names a vocabulary credits as roots.
+// publishedNames returns the published names an enum credits as roots.
 // The credit spares the name's own verdicts; rooting it keeps what rendering
 // a member calls live with it, rather than reporting that on exactly the claim
 // the name was spared. A name the view does not admit roots nothing.
-func publishedNames(prog *program, vocab *vocabulary, v view) []*ssa.Function {
+func publishedNames(prog *program, credit *enumNames, v view) []*ssa.Function {
 	var roots []*ssa.Function
-	for _, method := range vocab.methods {
+	for _, method := range credit.methods {
 		if fn := prog.FuncValue(method); fn != nil && v.admitsFunction(prog.Fset, fn) {
 			roots = append(roots, fn)
 		}
@@ -245,7 +245,7 @@ func unreachableFuncs(
 	initial []*packages.Package,
 	surface *apiSurface,
 	sealed *sealedSurface,
-	vocab *vocabulary,
+	credit *enumNames,
 	deadTypes map[string]bool,
 	facts map[*packages.Package]fileFacts,
 	tests bool,
@@ -253,12 +253,12 @@ func unreachableFuncs(
 	participation func(key string) bool,
 ) ([]declaration, []declaration, reachability, error) {
 	roots, unmeasured, err := selectRoots(
-		prog, ssaPkgs, initial, surface, sealed, vocab, deadTypes, facts, tests, v, participation,
+		prog, ssaPkgs, initial, surface, sealed, credit, deadTypes, facts, tests, v, participation,
 	)
 	if err != nil {
 		return nil, nil, reachability{}, err
 	}
-	if err = canceled(ctx, "analyzing reachability"); err != nil {
+	if err = canceled(ctx, StageAnalyzingReachability); err != nil {
 		return nil, nil, reachability{}, err
 	}
 

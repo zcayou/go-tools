@@ -128,7 +128,11 @@
 // receiver's type. Everything else at the top level of a test file is a root —
 // a spec, a go test entry point, an init function, a suite hook — and a file
 // consumes a fixture when one of its roots reaches it, directly or through
-// other fixtures in any file.
+// other fixtures in any file. A file that never names the fixture — does not
+// declare it, and refers to it from nothing it declares, a method on another
+// file's type included — is listed with the shortest chain of fixtures
+// it reaches it through, starting with the one it names, since a search
+// of the file would not find it.
 //
 // A helper name promises that what the file holds is shared, so where a fixture
 // lives follows from the files consuming it. One in a spec file that another

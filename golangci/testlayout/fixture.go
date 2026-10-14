@@ -3,6 +3,7 @@ package testlayout
 import (
 	"go/ast"
 	"go/token"
+	"slices"
 	"strings"
 )
 
@@ -22,6 +23,34 @@ type fixture struct {
 
 	// consumers are the files whose roots reach this fixture.
 	consumers map[string]bool
+
+	// namedBy are the files whose text names this fixture: the one declaring it,
+	// and any that refers to it, from a root or from a declaration of its own.
+	namedBy map[string]bool
+
+	// via holds, for each consumer that never names this fixture, the shortest
+	// chain of fixtures it reaches it through, starting with the one its roots
+	// refer to.
+	via map[string][]*fixture
+}
+
+// consumerNames names each file consuming the fixture, in order,
+// with the fixtures a file goes through when it never names the fixture.
+func (f *fixture) consumerNames(files []string) string {
+	names := make([]string, 0, len(files))
+	for _, file := range files {
+		path := f.via[file]
+		if len(path) == 0 {
+			names = append(names, file)
+			continue
+		}
+		through := make([]string, 0, len(path))
+		for _, step := range path {
+			through = append(through, step.name)
+		}
+		names = append(names, file+" (reached through "+strings.Join(through, ", then ")+")")
+	}
+	return strings.Join(names, ", ")
 }
 
 // fixtures is every fixture of one directory's test files, across both test
@@ -79,7 +108,13 @@ func (g *fixtures) declare(file testFile) {
 		g.byPackage[pkg] = make(map[string][]*fixture)
 	}
 	add := func(ident *ast.Ident) {
-		f := &fixture{name: ident.Name, ident: ident, consumers: make(map[string]bool)}
+		f := &fixture{
+			name:      ident.Name,
+			ident:     ident,
+			consumers: make(map[string]bool),
+			namedBy:   map[string]bool{file.name: true},
+			via:       make(map[string][]*fixture),
+		}
 		g.byFile[file.name] = append(g.byFile[file.name], f)
 		g.byPackage[pkg][ident.Name] = append(g.byPackage[pkg][ident.Name], f)
 	}
@@ -192,6 +227,9 @@ func (l *linker) refer(name string, qualified bool) {
 			found = l.graph.byPackage[l.whitebox][name]
 		}
 	}
+	for _, f := range found {
+		f.namedBy[l.file] = true
+	}
 	if len(l.owners) == 0 {
 		l.graph.roots[l.file] = append(l.graph.roots[l.file], found...)
 		return
@@ -294,16 +332,31 @@ func underTestImports(file *ast.File, underTest, whitebox string) (qualifiers []
 	return qualifiers, dot
 }
 
-// consume marks every fixture reachable from refs as consumed by file.
+// consume marks every fixture reachable from refs as consumed by file,
+// recording the shortest chain of fixtures that reaches one the file never
+// names.
 func (g *fixtures) consume(file string, refs []*fixture) {
-	queue := refs
+	type step struct {
+		f    *fixture
+		path []*fixture
+	}
+	queue := make([]step, 0, len(refs))
+	for _, f := range refs {
+		queue = append(queue, step{f: f})
+	}
 	for len(queue) > 0 {
-		f := queue[0]
+		next := queue[0]
 		queue = queue[1:]
-		if f.consumers[file] {
+		if next.f.consumers[file] {
 			continue
 		}
-		f.consumers[file] = true
-		queue = append(queue, f.uses...)
+		next.f.consumers[file] = true
+		if !next.f.namedBy[file] {
+			next.f.via[file] = next.path
+		}
+		path := append(slices.Clone(next.path), next.f)
+		for _, used := range next.f.uses {
+			queue = append(queue, step{f: used, path: path})
+		}
 	}
 }

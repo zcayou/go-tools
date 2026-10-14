@@ -32,17 +32,6 @@ var _ = Describe("Analyzer", func() {
 		Expect(analyzers[1].Name).NotTo(Equal(secondPluginAnalyzerName()))
 	})
 
-	It("declares no fact types, which would force analysis of every dependency", func() {
-		plugin, err := deadcode.New(nil)
-		Expect(err).NotTo(HaveOccurred())
-
-		analyzers, err := plugin.BuildAnalyzers()
-		Expect(err).NotTo(HaveOccurred())
-
-		Expect(analyzers[0].FactTypes).To(BeEmpty())
-		Expect(analyzers[0].Requires).To(BeEmpty())
-	})
-
 	It("reports each finding in the pass that holds its file", func() {
 		dir := fixtureDir("plain")
 		chdir(dir)
@@ -61,24 +50,6 @@ var _ = Describe("Analyzer", func() {
 			"main.go:14:6: test-only unreachable func: Tested",
 			"main.go:14:6: test-only unused exported func: Tested",
 		))
-	})
-
-	It("drops a finding in a file no pass holds", func() {
-		// Reporting is scoped to what golangci-lint was asked to lint, while
-		// the analysis always covers the module: the finding in main.go has nowhere
-		// to go.
-		dir := fixtureDir("plain")
-		chdir(dir)
-		analyzer := newAnalyzer()
-
-		var reported []string
-		for _, pkg := range loadFixture(dir, "./sub") {
-			diagnostics, err := runPass(analyzer, pkg, dir)
-			Expect(err).NotTo(HaveOccurred())
-			reported = append(reported, diagnostics...)
-		}
-
-		Expect(reported).To(BeEmpty())
 	})
 
 	It("places a finding in a file a //line directive renames", func() {
@@ -100,40 +71,6 @@ var _ = Describe("Analyzer", func() {
 			"main.go:8:6: unreachable func: Dead",
 			"main.go:8:6: unused exported func: Dead",
 		))
-	})
-
-	It("shares one analysis across every pass", func() {
-		// The second pass runs from a directory the engine could not anchor at, so
-		// it can only succeed on a result the first pass already produced.
-		dir := fixtureDir("plain")
-		chdir(dir)
-		analyzer := newAnalyzer()
-		pkgs := loadFixture(dir, "./...")
-		Expect(pkgs).To(HaveLen(2))
-
-		_, err := runPass(analyzer, pkgs[0], dir)
-		Expect(err).NotTo(HaveOccurred())
-
-		chdir(anchorlessDir())
-		_, err = runPass(analyzer, pkgs[1], dir)
-
-		Expect(err).NotTo(HaveOccurred())
-	})
-
-	It("fails every pass when the analysis cannot run", func() {
-		// golangci-lint keeps the first error and skips caching on any error, so
-		// there is nothing to be gained by reporting the failure once and staying
-		// silent afterwards.
-		dir := fixtureDir("plain")
-		pkgs := loadFixture(dir, "./...")
-		chdir(anchorlessDir())
-		analyzer := newAnalyzer()
-
-		_, first := runPass(analyzer, pkgs[0], dir)
-		_, second := runPass(analyzer, pkgs[1], dir)
-
-		Expect(first).To(MatchError(ContainSubstring("no go.mod at or above")))
-		Expect(second).To(MatchError(first))
 	})
 })
 

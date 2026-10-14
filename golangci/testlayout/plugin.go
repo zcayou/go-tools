@@ -1,12 +1,12 @@
 package testlayout
 
 import (
-	"errors"
-	"fmt"
 	"slices"
 
 	"github.com/golangci/plugin-module-register/register"
 	"golang.org/x/tools/go/analysis"
+
+	"github.com/zcayou/go-tools/golangci/internal/filepattern"
 )
 
 // Name is what golangci-lint knows this linter by: the key under
@@ -63,7 +63,7 @@ type Category struct {
 // a category does not name its own: one named for a source file beside it,
 // and the suite file, which is named for the suite rather than for any source.
 func DefaultPatterns() []string {
-	return []string{sourceToken + testSuffix, "suite_test.go"}
+	return []string{filepattern.SourceToken + testSuffix, "suite_test.go"}
 }
 
 // DefaultStandalonePatterns are the names a spec-bearing test file may have
@@ -97,11 +97,11 @@ var _ register.LinterPlugin = (*Plugin)(nil)
 func New(settings any) (register.LinterPlugin, error) {
 	s, err := register.DecodeSettings[Settings](settings)
 	if err != nil {
-		return nil, fmt.Errorf("%s: decoding settings: %w", Name, err)
+		return nil, &ConfigError{Problem: ProblemUndecodable, cause: err}
 	}
 	analyzer, err := NewAnalyzer(s)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", Name, err)
+		return nil, err
 	}
 
 	return &Plugin{analyzer: analyzer}, nil
@@ -123,22 +123,22 @@ type config struct {
 	whitebox   category
 	blackbox   category
 	standalone category
-	adapters   patternSet
+	adapters   filepattern.Set
 }
 
-// category is one validated [Category]. name is the settings key it came from,
-// so a diagnostic points at the knob that decides it.
+// category is one validated [Category]. kind names the settings block it came
+// from, so a diagnostic points at the knob that decides it.
 type category struct {
-	name    string
+	kind    Kind
 	allowed bool
 
 	// sourceless marks the kind whose files sit beside no source: no pattern
-	// of theirs can resolve [sourceToken], and a file of the kind that may
-	// not exist has no package rename to be offered.
+	// of theirs can resolve [filepattern.SourceToken], and a file of the kind
+	// that may not exist has no package rename to be offered.
 	sourceless bool
 
-	specs   patternSet
-	helpers patternSet
+	specs   filepattern.Set
+	helpers filepattern.Set
 }
 
 // category picks the kind a test file is: standalone when its directory holds
@@ -174,7 +174,7 @@ func (c category) names() string {
 // the setting that decided it is named instead.
 func (c category) specsBelong() string {
 	if len(c.specs) == 0 {
-		return c.name + ".patterns is empty, so no file of this kind may carry specs"
+		return c.kind.String() + ".patterns is empty, so no file of this kind may carry specs"
 	}
 	return "move them to a file named " + c.specs.String()
 }
@@ -184,7 +184,7 @@ func (c category) specsBelong() string {
 // no such name, so the setting that decided it is named instead.
 func (c category) helpersBelong() string {
 	if len(c.helpers) == 0 {
-		return c.name + ".helper-patterns is empty, so every file of this kind must carry specs"
+		return c.kind.String() + ".helper-patterns is empty, so every file of this kind must carry specs"
 	}
 	return "a file carrying only helpers must be named " + c.helpers.String()
 }
@@ -194,7 +194,7 @@ func (c category) helpersBelong() string {
 // so the setting that decided it is named instead.
 func (c category) fixturesBelong() string {
 	if len(c.helpers) == 0 {
-		return c.name + ".helper-patterns is empty, so no file of this kind may hold a fixture another file uses"
+		return c.kind.String() + ".helper-patterns is empty, so no file of this kind may hold a fixture another file uses"
 	}
 	return "a fixture another file uses belongs in a file named " + c.helpers.String()
 }
@@ -202,29 +202,29 @@ func (c category) fixturesBelong() string {
 // resolve fills in the defaults and compiles the patterns, rejecting
 // a configuration no file could satisfy.
 func (s Settings) resolve() (config, error) {
-	whitebox, err := s.Whitebox.resolve(category{name: "whitebox"}, DefaultPatterns())
+	whitebox, err := s.Whitebox.resolve(category{kind: KindWhitebox}, DefaultPatterns())
 	if err != nil {
 		return config{}, err
 	}
-	blackbox, err := s.Blackbox.resolve(category{name: "blackbox", allowed: true}, DefaultPatterns())
+	blackbox, err := s.Blackbox.resolve(category{kind: KindBlackbox, allowed: true}, DefaultPatterns())
 	if err != nil {
 		return config{}, err
 	}
 	standalone, err := s.Standalone.resolve(
-		category{name: "standalone", allowed: true, sourceless: true}, DefaultStandalonePatterns())
+		category{kind: KindStandalone, allowed: true, sourceless: true}, DefaultStandalonePatterns())
 	if err != nil {
 		return config{}, err
 	}
 	if !whitebox.allowed && !blackbox.allowed && !standalone.allowed {
-		return config{}, errors.New("no kind of test file is allowed, so none could exist")
+		return config{}, &ConfigError{Problem: ProblemNoKindAllowed}
 	}
 
 	adapters, err := patternsOr(s.AdapterPatterns, DefaultAdapterPatterns())
 	if err != nil {
-		return config{}, fmt.Errorf("adapter-patterns: %w", err)
+		return config{}, &ConfigError{Setting: SettingAdapterPatterns, Problem: ProblemMalformedPattern, cause: err}
 	}
 	if len(adapters) == 0 {
-		return config{}, errors.New("adapter-patterns is empty, so no file could hold the Ginkgo adapter")
+		return config{}, &ConfigError{Setting: SettingAdapterPatterns, Problem: ProblemNoAdapterName}
 	}
 
 	return config{whitebox: whitebox, blackbox: blackbox, standalone: standalone, adapters: adapters}, nil
@@ -246,19 +246,23 @@ func (c *Category) resolve(defaults category, specs []string) (category, error) 
 
 	var err error
 	if out.specs, err = patternsOr(c.Patterns, specs); err != nil {
-		return category{}, fmt.Errorf("%s.patterns: %w", out.name, err)
+		return category{}, &ConfigError{
+			Kind: out.kind, Setting: SettingPatterns, Problem: ProblemMalformedPattern, cause: err,
+		}
 	}
 	if out.helpers, err = patternsOr(c.HelperPatterns, DefaultHelperPatterns()); err != nil {
-		return category{}, fmt.Errorf("%s.helper-patterns: %w", out.name, err)
+		return category{}, &ConfigError{
+			Kind: out.kind, Setting: SettingHelperPatterns, Problem: ProblemMalformedPattern, cause: err,
+		}
 	}
 	if out.allowed && len(out.specs)+len(out.helpers) == 0 {
-		return category{}, fmt.Errorf("%s is allowed but no pattern permits any name", out.name)
+		return category{}, &ConfigError{Kind: out.kind, Problem: ProblemNoName}
 	}
 	if out.sourceless {
-		if err = out.specs.noSource(out.name + ".patterns"); err != nil {
+		if err = noSource(out.specs, out.kind, SettingPatterns); err != nil {
 			return category{}, err
 		}
-		if err = out.helpers.noSource(out.name + ".helper-patterns"); err != nil {
+		if err = noSource(out.helpers, out.kind, SettingHelperPatterns); err != nil {
 			return category{}, err
 		}
 	}
@@ -268,9 +272,21 @@ func (c *Category) resolve(defaults category, specs []string) (category, error) 
 // patternsOr compiles texts, or the fallback when the setting was absent.
 // An explicitly empty list stays empty: "no file of this sort is allowed"
 // is a thing a repository may mean, while leaving the key out is not.
-func patternsOr(texts, fallback []string) (patternSet, error) {
+func patternsOr(texts, fallback []string) (filepattern.Set, error) {
 	if texts == nil {
 		texts = fallback
 	}
-	return newPatternSet(texts)
+	return filepattern.NewSet(texts)
+}
+
+// noSource rejects a pattern resolving [filepattern.SourceToken] in a set
+// naming files that sit beside no source. kind and setting are where the set
+// came from, for the error to point at.
+func noSource(set filepattern.Set, kind Kind, setting Setting) error {
+	for _, p := range set {
+		if p.NamesSource() {
+			return &ConfigError{Kind: kind, Setting: setting, Problem: ProblemSourcelessPattern, Pattern: p.String()}
+		}
+	}
+	return nil
 }

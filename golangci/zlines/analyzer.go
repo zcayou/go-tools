@@ -6,6 +6,7 @@ import (
 	"go/ast"
 	"go/token"
 	"os"
+	"strconv"
 	"unicode/utf8"
 
 	"golang.org/x/tools/go/analysis"
@@ -16,23 +17,39 @@ import (
 // golangci-lint discards [analysis.Diagnostic.Category], so the rule is also
 // the first word of every message; that is what makes it addressable
 // by a linters.exclusions text rule.
-type Rule string
+type Rule int
 
-// RuleSignatureWrap fires on a function signature spread over several lines
-// that would fit inside the line-length limit on one, which makes its line
-// breaks noise.
-const RuleSignatureWrap Rule = "signature-wrap"
+const (
+	// RuleSignatureWrap fires on a function signature spread over several lines
+	// that would fit inside the line-length limit on one, which makes its line
+	// breaks noise.
+	RuleSignatureWrap Rule = iota + 1
 
-// RuleBodyCollapse fires on a function body written onto the line its signature
-// ends on, where a reader going down a file's declarations does not expect
-// to find code.
-const RuleBodyCollapse Rule = "body-collapse"
+	// RuleBodyCollapse fires on a function body written onto the line its
+	// signature ends on, where a reader going down a file's declarations does
+	// not expect to find code.
+	RuleBodyCollapse
 
-// RuleCommentWrap fires on a comment paragraph with a line outside the band
-// the comment settings draw — past the limit, short of the minimum while
-// the next word would still fit — or ending on a word that belongs
-// with the line below.
-const RuleCommentWrap Rule = "comment-wrap"
+	// RuleCommentWrap fires on a comment paragraph with a line outside the band
+	// the comment settings draw — past the limit, short of the minimum while
+	// the next word would still fit — or ending on a word that belongs
+	// with the line below.
+	RuleCommentWrap
+)
+
+// String is the rule's token, which opens every message the rule reports.
+func (r Rule) String() string {
+	switch r {
+	case RuleSignatureWrap:
+		return "signature-wrap"
+	case RuleBodyCollapse:
+		return "body-collapse"
+	case RuleCommentWrap:
+		return "comment-wrap"
+	default:
+		return "Rule(" + strconv.Itoa(int(r)) + ")"
+	}
+}
 
 const analyzerDoc = `checks for line breaks a declaration should not have, and line breaks it should
 
@@ -127,7 +144,7 @@ func (c *checker) checkSignature(pass *analysis.Pass, src []byte, file *token.Fi
 	pass.Report(analysis.Diagnostic{
 		Pos:      decl.Pos(),
 		End:      decl.Type.End(),
-		Category: string(RuleSignatureWrap),
+		Category: RuleSignatureWrap.String(),
 		Message: fmt.Sprintf("%s: %s: signature is wrapped but fits on one %d-column line (limit %d)",
 			RuleSignatureWrap, decl.Name.Name, sig.width, c.lineLength),
 		SuggestedFixes: []analysis.SuggestedFix{{
@@ -152,7 +169,7 @@ func (c *checker) checkBody(pass *analysis.Pass, src []byte, file *token.File, d
 	diagnostic := analysis.Diagnostic{
 		Pos:      decl.Body.Lbrace,
 		End:      decl.Body.End(),
-		Category: string(RuleBodyCollapse),
+		Category: RuleBodyCollapse.String(),
 		Message: fmt.Sprintf("%s: %s: body is written on the signature line rather than lines of its own",
 			RuleBodyCollapse, decl.Name.Name),
 	}
@@ -200,7 +217,7 @@ func (c *checker) checkComments(pass *analysis.Pass, src []byte, file *token.Fil
 			pass.Report(analysis.Diagnostic{
 				Pos:      para.pos,
 				End:      para.end,
-				Category: string(RuleCommentWrap),
+				Category: RuleCommentWrap.String(),
 				Message:  message,
 				SuggestedFixes: []analysis.SuggestedFix{{
 					Message: "fill the comment to the limit",

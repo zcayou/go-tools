@@ -1,8 +1,6 @@
 package engine
 
 import (
-	"errors"
-	"fmt"
 	"slices"
 	"strings"
 
@@ -30,7 +28,7 @@ func newTestFacing(patterns []string, tests bool) (*testFacing, error) {
 		}
 	}
 	if len(declared.patterns) > 0 && !tests {
-		return nil, errors.New("test-facing requires tests")
+		return nil, &ConfigError{Setting: SettingTestFacing, Problem: ProblemRequiresTests}
 	}
 	return declared, nil
 }
@@ -44,7 +42,7 @@ func (t *testFacing) resolve(load *packages.Config, surface *apiSurface) error {
 	if len(t.patterns) == 0 {
 		return nil
 	}
-	resolved, err := resolvePatterns(load, "test-facing", t.patterns)
+	resolved, err := resolvePatterns(load, SettingTestFacing, t.patterns)
 	if err != nil {
 		return err
 	}
@@ -56,7 +54,7 @@ func (t *testFacing) resolve(load *packages.Config, surface *apiSurface) error {
 	}
 	if len(overlap) > 0 {
 		slices.Sort(overlap)
-		return fmt.Errorf("declared both api and test-facing: %s", strings.Join(overlap, ", "))
+		return &ConfigError{Setting: SettingTestFacing, Problem: ProblemOverlapsAPI, Packages: overlap}
 	}
 	t.packages = resolved
 	return nil

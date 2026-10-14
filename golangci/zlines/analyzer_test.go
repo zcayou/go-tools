@@ -80,7 +80,7 @@ var _ = Describe("Analyzer", func() {
 		results := analysistest.Run(GinkgoT(), analysistest.TestData(),
 			zlines.NewAnalyzer(zlines.Settings{}), "comments")
 
-		Expect(messages(results)).To(ContainElement(string(zlines.RuleCommentWrap) +
+		Expect(messages(results)).To(ContainElement(zlines.RuleCommentWrap.String() +
 			": comment wraps over 3 lines; filled to 80 columns it takes 1"))
 		Expect(edits(results)).To(ContainElement("// this is a short comment blah"))
 		Expect(edits(results)).To(ContainElement(
@@ -101,7 +101,7 @@ var _ = Describe("Analyzer", func() {
 	It("holds a paragraph of one line to the limit when the overrun is zero", func() {
 		Expect(analyze(zlines.NewAnalyzer(zlines.Settings{}), loneComment).messages()).To(BeEmpty())
 		Expect(analyze(zlines.NewAnalyzer(zlines.Settings{CommentOverrun: new(0)}), loneComment).messages()).
-			To(ConsistOf(string(zlines.RuleCommentWrap) +
+			To(ConsistOf(zlines.RuleCommentWrap.String() +
 				": comment wraps over 1 lines; filled to 80 columns it takes 2"))
 	})
 
@@ -113,7 +113,7 @@ var _ = Describe("Analyzer", func() {
 	It("restores the exact fill when the minimum meets the length", func() {
 		analyzer := zlines.NewAnalyzer(zlines.Settings{CommentLength: new(30), CommentMinLength: new(30)})
 
-		Expect(analyze(analyzer, bandedComment).messages()).To(ConsistOf(string(zlines.RuleCommentWrap) +
+		Expect(analyze(analyzer, bandedComment).messages()).To(ConsistOf(zlines.RuleCommentWrap.String() +
 			": comment is wrapped short of the 30-column minimum"))
 	})
 
@@ -124,7 +124,7 @@ var _ = Describe("Analyzer", func() {
 			"type split struct{}\n"
 
 		Expect(analyze(zlines.NewAnalyzer(zlines.Settings{CommentLength: new(30)}), src).messages()).To(
-			ConsistOf(string(zlines.RuleCommentWrap) +
+			ConsistOf(zlines.RuleCommentWrap.String() +
 				": comment wraps over 1 lines; filled to 30 columns it takes 3"))
 	})
 
@@ -247,7 +247,7 @@ func fixText(results []*analysistest.Result, rule zlines.Rule, name string) stri
 
 	for _, result := range results {
 		for _, diagnostic := range result.Diagnostics {
-			if !strings.HasPrefix(diagnostic.Message, string(rule)+": "+name+": ") {
+			if !strings.HasPrefix(diagnostic.Message, rule.String()+": "+name+": ") {
 				continue
 			}
 
@@ -258,7 +258,7 @@ func fixText(results []*analysistest.Result, rule zlines.Rule, name string) stri
 		}
 	}
 
-	Fail("no " + string(rule) + " diagnostic for " + name)
+	Fail("no " + rule.String() + " diagnostic for " + name)
 
 	return ""
 }

@@ -1,4 +1,4 @@
-// Package facade renames owner's vocabulary so a consumer needs one import.
+// Package facade renames owner's enum so a consumer needs one import.
 package facade
 
 import (

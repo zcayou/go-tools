@@ -1,6 +1,8 @@
 package zlines_test
 
 import (
+	"errors"
+
 	"github.com/golangci/plugin-module-register/register"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -130,55 +132,71 @@ var _ = Describe("Plugin", func() {
 	It("rejects a negative comment length rather than reading it as unset", func() {
 		_, err := zlines.New(map[string]any{"comment-length": -1})
 
-		Expect(err).To(MatchError(ContainSubstring("comment-length must be positive")))
+		Expect(err).To(MatchError(&zlines.ConfigError{
+			Setting: zlines.SettingCommentLength, Problem: zlines.ProblemNotPositive, Value: -1,
+		}))
 	})
 
 	It("rejects a comment length of zero rather than defaulting it", func() {
 		_, err := zlines.New(map[string]any{"comment-length": 0})
 
-		Expect(err).To(MatchError(ContainSubstring("comment-length must be positive")))
+		Expect(err).To(MatchError(&zlines.ConfigError{
+			Setting: zlines.SettingCommentLength, Problem: zlines.ProblemNotPositive,
+		}))
 	})
 
 	It("rejects a comment minimum of zero rather than defaulting it", func() {
 		_, err := zlines.New(map[string]any{"comment-min-length": 0})
 
-		Expect(err).To(MatchError(ContainSubstring("comment-min-length must be positive")))
+		Expect(err).To(MatchError(&zlines.ConfigError{
+			Setting: zlines.SettingCommentMinLength, Problem: zlines.ProblemNotPositive,
+		}))
 	})
 
 	It("rejects a comment minimum past the length, a band nothing could satisfy", func() {
 		_, err := zlines.New(map[string]any{"comment-length": 80, "comment-min-length": 90})
 
-		Expect(err).To(MatchError(ContainSubstring("comment-min-length 90 exceeds comment-length 80")))
+		Expect(err).To(MatchError(&zlines.ConfigError{
+			Setting: zlines.SettingCommentMinLength, Problem: zlines.ProblemMinimumPastLength, Value: 90, Limit: 80,
+		}))
 	})
 
 	It("rejects a negative comment overrun, which would report the fill's own line", func() {
 		_, err := zlines.New(map[string]any{"comment-overrun": -1})
 
-		Expect(err).To(MatchError(ContainSubstring("comment-overrun must not be negative")))
+		Expect(err).To(MatchError(&zlines.ConfigError{
+			Setting: zlines.SettingCommentOverrun, Problem: zlines.ProblemNegative, Value: -1,
+		}))
 	})
 
 	It("rejects an unknown settings key rather than ignoring it", func() {
 		_, err := zlines.New(map[string]any{"max-line-length": 160})
 
-		Expect(err).To(MatchError(ContainSubstring("max-line-length")))
+		Expect(err).To(BeAssignableToTypeOf(&zlines.ConfigError{}))
+		Expect(err).To(HaveField("Problem", zlines.ProblemUndecodable))
+		Expect(errors.Unwrap(err)).To(MatchError(ContainSubstring(`unknown field "max-line-length"`)))
 	})
 
 	It("rejects a negative line length rather than reading it as unset", func() {
 		_, err := zlines.New(map[string]any{"line-length": -1})
 
-		Expect(err).To(MatchError(ContainSubstring("line-length must be positive")))
+		Expect(err).To(MatchError(&zlines.ConfigError{
+			Setting: zlines.SettingLineLength, Problem: zlines.ProblemNotPositive, Value: -1,
+		}))
 	})
 
 	It("rejects a line length of zero rather than defaulting it", func() {
 		_, err := zlines.New(map[string]any{"line-length": 0})
 
-		Expect(err).To(MatchError(ContainSubstring("line-length must be positive")))
+		Expect(err).To(MatchError(&zlines.ConfigError{Setting: zlines.SettingLineLength, Problem: zlines.ProblemNotPositive}))
 	})
 
 	It("rejects an empty exempt prefix, which would exempt every comment there is", func() {
 		_, err := zlines.New(map[string]any{"comment-exempt": []string{""}})
 
-		Expect(err).To(MatchError(ContainSubstring("comment-exempt must not hold an empty prefix")))
+		Expect(err).To(MatchError(&zlines.ConfigError{
+			Setting: zlines.SettingCommentExempt, Problem: zlines.ProblemEmptyPrefix,
+		}))
 	})
 
 	It("exposes exactly the analyzer golangci-lint should run", func() {

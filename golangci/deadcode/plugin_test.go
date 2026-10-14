@@ -1,6 +1,8 @@
 package deadcode_test
 
 import (
+	"errors"
+
 	"github.com/golangci/plugin-module-register/register"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -35,45 +37,60 @@ var _ = Describe("Plugin", func() {
 			"api":                []string{"./pkg/..."},
 			"api-test-consumers": true,
 		}),
-		Entry("vocabulary names", map[string]any{"vocabulary-names": true}),
+		Entry("enum names", map[string]any{"enum-names": true}),
 		Entry("test-facing under the default tests", map[string]any{"test-facing": []string{"./plugins/test/..."}}),
 		Entry("roots", map[string]any{"roots": []string{"tools/*.go"}}),
 	)
 
+	It("rejects an unknown key, which is a typo rather than a no-op", func() {
+		_, err := deadcode.New(map[string]any{"pattern": []string{"./..."}})
+
+		Expect(err).To(BeAssignableToTypeOf(&engine.ConfigError{}))
+		Expect(err).To(HaveField("Problem", engine.ProblemUndecodable))
+		Expect(errors.Unwrap(err)).To(MatchError(ContainSubstring(`unknown field "pattern"`)))
+	})
+
 	DescribeTable("rejected settings",
-		func(settings any, message string) {
+		func(settings any, expected *engine.ConfigError) {
 			_, err := deadcode.New(settings)
 
-			Expect(err).To(MatchError(ContainSubstring(message)))
+			Expect(err).To(MatchError(expected))
 		},
-		Entry("an unknown key is a typo, not a no-op",
-			map[string]any{"pattern": []string{"./..."}}, "pattern"),
 		Entry("an empty pattern list means the packages in it, of which there are none",
-			map[string]any{"patterns": []string{}}, "patterns is empty"),
+			map[string]any{"patterns": []string{}},
+			&engine.ConfigError{Setting: engine.SettingPatterns, Problem: engine.ProblemEmpty}),
 		Entry("exemptions with nothing to exempt",
-			map[string]any{"api-exempt": []string{"methods"}}, "api-exempt requires api"),
+			map[string]any{"api-exempt": []string{"methods"}},
+			&engine.ConfigError{Setting: engine.SettingAPIExempt, Problem: engine.ProblemRequiresAPI}),
 		Entry("an empty exemption list with nothing to exempt",
-			map[string]any{"api-exempt": []string{}}, "api-exempt requires api"),
+			map[string]any{"api-exempt": []string{}},
+			&engine.ConfigError{Setting: engine.SettingAPIExempt, Problem: engine.ProblemRequiresAPI}),
 		Entry("an unknown exemption",
 			map[string]any{"api": []string{"./..."}, "api-exempt": []string{"nonsense"}},
-			`unknown api-exempt "nonsense"`),
+			&engine.ConfigError{Setting: engine.SettingAPIExempt, Problem: engine.ProblemUnknownValue, Value: "nonsense"}),
 		Entry("a generic rooting with nothing to root",
-			map[string]any{"api-generics": "instantiated"}, "api-generics requires api"),
+			map[string]any{"api-generics": "instantiated"},
+			&engine.ConfigError{Setting: engine.SettingAPIGenerics, Problem: engine.ProblemRequiresAPI}),
 		Entry("an unknown generic rooting",
 			map[string]any{"api": []string{"./..."}, "api-generics": "monomorphized"},
-			`unknown api-generics "monomorphized"`),
+			&engine.ConfigError{
+				Setting: engine.SettingAPIGenerics, Problem: engine.ProblemUnknownValue, Value: "monomorphized",
+			}),
 		Entry("tests standing in for the consumers of no api",
-			map[string]any{"api-test-consumers": true}, "api-test-consumers requires api"),
+			map[string]any{"api-test-consumers": true},
+			&engine.ConfigError{Setting: engine.SettingAPITestConsumers, Problem: engine.ProblemRequiresAPI}),
 		Entry("tests standing in for consumers with the masked view turned off",
 			map[string]any{"api": []string{"./pkg/..."}, "tests": false, "api-test-consumers": true},
-			"api-test-consumers requires tests"),
+			&engine.ConfigError{Setting: engine.SettingAPITestConsumers, Problem: engine.ProblemRequiresTests}),
 		Entry("test-facing with the masked view it speaks to turned off",
 			map[string]any{"tests": false, "test-facing": []string{"./plugins/test/..."}},
-			"test-facing requires tests"),
+			&engine.ConfigError{Setting: engine.SettingTestFacing, Problem: engine.ProblemRequiresTests}),
 		Entry("an empty test-facing list means the packages in it, of which there are none",
-			map[string]any{"test-facing": []string{}}, "test-facing is empty"),
+			map[string]any{"test-facing": []string{}},
+			&engine.ConfigError{Setting: engine.SettingTestFacing, Problem: engine.ProblemEmpty}),
 		Entry("an empty roots list means the files in it, of which there are none",
-			map[string]any{"roots": []string{}}, "roots is empty"),
+			map[string]any{"roots": []string{}},
+			&engine.ConfigError{Setting: engine.SettingRoots, Problem: engine.ProblemEmpty}),
 	)
 
 	DescribeTable("api exemptions",
@@ -95,16 +112,8 @@ var _ = Describe("Plugin", func() {
 		Expect(config.APITestConsumers).To(BeTrue())
 	})
 
-	It("hands the engine the vocabulary-names credit", func() {
-		Expect(engineConfig(map[string]any{"vocabulary-names": true}).VocabularyNames).To(BeTrue())
-	})
-
-	It("names the decoding failure once", func() {
-		// register.DecodeSettings already says what it was doing, and golangci-lint
-		// prefixes the plugin name on top of that.
-		_, err := deadcode.New(map[string]any{"nope": true})
-
-		Expect(err.Error()).To(Equal(`decoding settings: json: unknown field "nope"`))
+	It("hands the engine the enum-names credit", func() {
+		Expect(engineConfig(map[string]any{"enum-names": true}).EnumNames).To(BeTrue())
 	})
 
 	It("builds without touching the filesystem", func() {
