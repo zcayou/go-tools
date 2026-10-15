@@ -13,21 +13,39 @@ existing CI wiring apply unchanged.
 
 | Name | What it checks | Fixes |
 |---|---|---|
-| `testlayout` | Test files follow the repository's test-suite layout conventions. | |
-| `deadcode` | Code that nothing can reach, by whole-program call-graph analysis. | |
+| `ztest` | Test files follow the repository's layout, and specs say which error and which enum member they got, under the context their framework hands them. | |
+| `deadcode` | Code that nothing can reach, by whole-program call-graph analysis, and fields callers set that nothing reads. | |
 | `zlines` | Line breaks a declaration or comment should not have, and line breaks it should. | `--fix` |
-| `zerrors` | Errors a caller cannot tell apart, decisions on error text, and error fields that should be enums. | |
-| `zenum` | Enums that are not ordinal, unnamed, ambiguously named, or made by conversion. | |
-| `zassert` | Specs that assert an error occurred without saying which, or assert an error's text or an enum's token outside the spec that pins it. | |
+| `zerrors` | Errors a caller cannot tell apart, decisions on error text, and error fields that should be enums or typed values. | |
+| `zenum` | Enums that are not ordinal, unnamed, ambiguously named, made by conversion, or leaked, printed or ordered as numbers. | |
 
-Each linter's package doc — [testlayout], [deadcode], [zlines], [zerrors],
-[zenum], [zassert] — is the full reference for its rules; the sections below
-cover configuration.
+Each linter's package doc — [ztest], [deadcode], [zlines], [zerrors], [zenum]
+— is the full reference for its rules; the sections below cover configuration.
 
-### testlayout
+### Choosing rules
 
-Sorts every test file into one of three kinds and checks which kinds are
-allowed and what each may be named. Beside a source, the package a file
+Every linter takes the same three keys, in the shape golangci-lint gives its own
+`linters` block:
+
+```yaml
+          default: standard   # standard, all or none; absent means standard
+          enable: [rule, ...]
+          disable: [rule, ...]
+```
+
+The rules that run are the default set, plus `enable`, minus `disable`.
+`standard` is every rule but the opt-in ones — only deadcode's `inert-field` is
+opt-in — `all` is every rule, and `none` is none. A selection that changes
+nothing fails the run: an unknown rule, a rule in both lists, enabling one
+already on or disabling one already off, an empty list, a selection leaving
+nothing enabled, and a setting given while every rule it configures is off.
+Each linter's doc says which rules each of its settings serves.
+
+### ztest
+
+Judges test files in two halves under one name. The layout rules sort every
+test file into one of three kinds and check which kinds are allowed and what
+each may be named. Beside a source, the package a file
 declares decides — white-box files declare the package under test, black-box
 files declare the external `<pkg>_test` package. In a directory holding no
 source to test, such as an integration suite, a file is standalone and named
@@ -39,7 +57,7 @@ black-box files beside a source and standalone files where there is none:
 linters:
   settings:
     custom:
-      testlayout:
+      ztest:
         type: module
         settings:
           whitebox:
@@ -53,6 +71,10 @@ linters:
             patterns: ['*_test.go']
             helper-patterns: [helpers_test.go, fakes_test.go]
           adapter-patterns: [suite_test.go]
+          api: ['./pkg/...']                    # give zerrors and ztest the same list
+          build-tags: [integration]             # the tags the api patterns resolve under
+          rendering-patterns: ['<source>_test.go']  # default; [] means no file pins a rendering
+          disable: [background-context]         # every rule is standard
 ```
 
 A fixture — a package-level declaration specs use — lives in the one file
@@ -63,6 +85,30 @@ reports one a spec file declares for another file, and
 Exclude directories with their own layout through `linters.exclusions.paths`.
 Don't enable golangci-lint's built-in `testpackage` alongside this linter —
 they overlap under the default settings.
+
+The spec rules hold Ginkgo/Gomega and testify specs to asserting which error
+they got, and which enum member, and to running under their framework's
+context. They judge test files only, so they need golangci-lint's `run.tests`,
+the default. The linter is typed: an enum is known by a fact the pass over its
+declaring package exports, so golangci-lint analyzes dependencies from source
+and caches the facts, as it already does for govet.
+
+`unidentified-error` reports `HaveOccurred()`, a negated `Succeed()`, a negated
+`BeNil()` on an error, and testify's `Error` and `NotNil` on an error, in the
+specs of API packages. `text-assertion` reports an assertion on an error's
+text — `MatchError` given text or an error built with `errors.New` or
+`fmt.Errorf`, `Expect(err.Error())` or a variable holding it, `EqualError`,
+`ErrorContains` and the like — except in the spec file that pins a rendering:
+one a `rendering-patterns` entry names for a source declaring `Error() string`.
+`token-assertion` reports an assertion on an enum's rendering —
+`Expect(s.String())`, `string(s)` of a string enum, `fmt.Sprint(s)`,
+`HaveField("State.String()", …)`, testify's `Equal` of one — except in the spec
+file a `rendering-patterns` entry names for the file declaring the enum or its
+`String`. Only enums declared in the module are judged. A negated assertion is
+exempt from both, and so is a text assertion on `errors.Unwrap(err)`.
+`background-context` reports `context.Background` or `context.TODO` in a test
+file, where `t.Context()` or Ginkgo's `SpecContext` is canceled when the test
+ends or times out; an `Example` and `TestMain` have no context to take.
 
 ### zlines
 
@@ -83,11 +129,12 @@ linters:
           comment-length: 80      # default 80
           comment-min-length: 70  # default: 10 under comment-length
           comment-overrun: 10     # default 10
-          signature-wrap: false   # default true
-          body-collapse: false    # default true
-          comment-wrap: false     # default true
           comment-exempt: ['+kubebuilder']
+          disable: [body-collapse]  # every rule is standard
 ```
+
+`line-length` serves `signature-wrap`, and the `comment-*` settings serve
+`comment-wrap`.
 
 Set `line-length` to the limit the repository already enforces; it governs
 `signature-wrap` only. `comment-exempt` lists prefixes marking comment lines
@@ -132,7 +179,23 @@ linters:
           enum-names: true   # an enum's String is its published name
           test-facing: ['./plugins/test/...']  # packages whose intended consumers are tests
           roots: ['tools/*.go']    # entry-point files the load cannot reach
+          enable: [inert-field]    # opt-in; requires api
+          echo-functions:          # reads that echo a field rather than act on it
+            - {function: example.com/policy.(*Spec).Fingerprint, reason: folds fields into an identity}
 ```
+
+The verdicts are the analysis itself and are not selectable. Beside them sits
+one opt-in rule, `inert-field`: an exported field of a struct the API takes
+from its caller that no live module code reads, so the caller sets it and
+nothing happens. Which structs a caller hands in is derived from the `api`
+packages' signatures by the direction each value crosses — a parameter is the
+caller's, a result the module's, and a func type or an implemented interface
+method flips it. A read counts only in code production roots reach, outside
+test files; converting a value to an interface reads every exported field
+beneath it, since reflection can; reads in `String`, `GoString`, `Format` and
+the `echo-functions` don't count; and a `Deprecated:` field is not judged. Its
+messages open with `inert-field:`. An `echo-functions` entry naming no function
+of the module, or exempting nothing, fails the run.
 
 With `tests: true`, production code that only test code keeps alive is
 reported as a finding family of its own: every verdict has a `test-only` form
@@ -329,6 +392,7 @@ linters:
           base: example.com/framework/contract.Classification  # every error type carries it
           base-packages: ['./pkg/...', './internal/...']        # absent means ./...; where base applies
           build-tags: [integration]
+          disable: [text-decision]  # every rule is standard
 ```
 
 `unstructured-return` judges what a caller outside the module calls: exported
@@ -337,7 +401,11 @@ interfaces, and implementations the module hands to a `trusted` framework.
 `text-decision` reports a branch on `Error()` or on an error type's `string`
 field, anywhere. `literal-field` reports an error type's `string` field that
 only ever holds constants, which wants an enum type, or, when it only ever holds
-one value, carries no information and wants removing. `missing-base`, only
+one value, carries no information and wants removing. `rendered-field` reports
+an error type's `string` field that only ever holds the `String` of one
+exported, comparable, non-enum type of an API package, judged per
+instantiation: the caller wants the typed value, not text to compare.
+`missing-base`, only
 while `base` is set, reports an error type that does not carry it, in the
 packages `base-packages` matches: code that stays outside the framework on
 purpose is left out there rather than through exclusions. Unlike `api`, its
@@ -345,7 +413,10 @@ patterns match `internal` and `main` packages too.
 
 A `trusted`, `protocols` or `base` entry that matches nothing, and an `api` or
 `base-packages` pattern matching no package it could mean, fail the run rather
-than meaning nothing.
+than meaning nothing. `api` serves `unstructured-return`, `literal-field` and
+`rendered-field`; `trusted`, `protocols` and `sentinels` serve
+`unstructured-return`; `base` serves it and `missing-base`; `base-packages`
+serves `missing-base`.
 
 ### zenum
 
@@ -371,12 +442,22 @@ linters:
             - {type: example.com/m/sync.Strategy, reason: zero means merge}
           related-enums:            # tokens overlap because they classify different things
             - {first: example.com/m/a.State, second: example.com/m/b.Phase, reason: phases mirror states}
+          ordered-enums:            # ordinals are an order, so comparing them is meaningful
+            - {type: example.com/m/log.Level, reason: severity rises with the ordinal}
           build-tags: [integration]
+          disable: [ordered-comparison]  # every rule is standard
 ```
 
 The rules are `string-enum`, `unnamed`, `unreadable-name`,
 `ambiguous-name`, `zero-member`, `restated`, `token-decision`,
-`forged-conversion` and `numeric-verb`. A `String` is read rather than run, in
+`forged-conversion`, `numeric-verb`, `string-bypass`, `laundered-conversion`
+and `ordered-comparison`. The last three, and `token-decision`'s comparison
+with a member's value spelled as a number, leave the declaring package alone:
+it owns its encoding. `numeric-verb` and `string-bypass` follow fmt into what
+it formats — fields, elements, map entries — and judge every printer: vet's,
+the module's own wrappers found as vet finds them, and a foreign `…f(format
+string, args ...any)`. `zero-defaults` serves `zero-member`, `related-enums`
+`restated`, and `ordered-enums` `ordered-comparison`. A `String` is read rather than run, in
 the forms people write and the three layouts `stringer` generates; a member's
 token is a string reached for its value specifically — read from a table by the
 receiver, or inside a branch an equality on the receiver entered — and a
@@ -384,40 +465,6 @@ fallback gives none. Each entry
 is a property of the type, applied wherever it is used, and needs a reason; an
 entry that suppresses nothing fails the run. A one-off goes through
 `//nolint:zenum` or an exclusion.
-
-### zassert
-
-Holds Ginkgo/Gomega and testify specs to asserting which error they got, and
-which enum member. It judges test files only, so it needs golangci-lint's
-`run.tests`, the default. It is typed: an enum is known by a fact the pass over
-its declaring package exports, so golangci-lint analyzes dependencies from
-source and caches the facts, as it already does for govet.
-
-```yaml
-linters:
-  settings:
-    custom:
-      zassert:
-        type: module
-        settings:
-          api: ['./pkg/...']                    # give zerrors and zassert the same list
-          build-tags: [integration]             # the tags the api patterns resolve under
-          rendering-patterns: ['<source>_test.go']  # default; [] means no file pins a rendering
-```
-
-`unidentified-error` reports `HaveOccurred()`, a negated `Succeed()`, a negated
-`BeNil()` on an error, and testify's `Error` and `NotNil` on an error, in the
-specs of API packages. `text-assertion` reports an assertion on an error's
-text — `MatchError` given text or an error built with `errors.New` or
-`fmt.Errorf`, `Expect(err.Error())` or a variable holding it, `EqualError`,
-`ErrorContains` and the like — except in the spec file that pins a rendering:
-one a `rendering-patterns` entry names for a source declaring `Error() string`.
-`token-assertion` reports an assertion on an enum's rendering —
-`Expect(s.String())`, `string(s)` of a string enum, `fmt.Sprint(s)`,
-`HaveField("State.String()", …)`, testify's `Equal` of one — except in the spec
-file a `rendering-patterns` entry names for the file declaring the enum or its
-`String`. Only enums declared in the module are judged. A negated assertion is
-exempt from both, and so is a text assertion on `errors.Unwrap(err)`.
 
 ## Usage
 
@@ -447,12 +494,12 @@ Enable the linters in `.golangci.yml`:
 version: "2"
 linters:
   enable:
-    - testlayout
+    - ztest
   settings:
     custom:
-      testlayout:
+      ztest:
         type: module
-        description: Checks that test files follow the repository's test-suite layout conventions.
+        description: Checks test files' layout and what their specs assert.
         original-url: github.com/zcayou/go-tools
 ```
 
@@ -464,13 +511,14 @@ that opens every message:
 linters:
   exclusions:
     rules:
-      - linters: [testlayout]
+      - linters: [ztest]
         text: '^spec-less-test-file:'
 ```
 
-`testlayout` and `zlines` open each message with the rule name; `deadcode`
+Every message opens with its rule's name, except that a `deadcode` verdict
 opens with the verdict (`unreachable func:`, `unused exported func:`, and so
-on).
+on). Turning a rule off for the whole repository is `disable` rather than an
+exclusion.
 
 **Clear the cache after every rebuild.** Rebuilding the binary does not
 invalidate golangci-lint's cache, so a stale build replays its previous
@@ -500,9 +548,8 @@ fetched through a Go proxy is missing them.
 
 Copyright 2026 Zachary Cayou. [Apache License 2.0](LICENSE).
 
-[testlayout]: https://pkg.go.dev/github.com/zcayou/go-tools/golangci/testlayout
+[ztest]: https://pkg.go.dev/github.com/zcayou/go-tools/golangci/ztest
 [deadcode]: https://pkg.go.dev/github.com/zcayou/go-tools/golangci/deadcode
 [zlines]: https://pkg.go.dev/github.com/zcayou/go-tools/golangci/zlines
 [zerrors]: https://pkg.go.dev/github.com/zcayou/go-tools/golangci/zerrors
 [zenum]: https://pkg.go.dev/github.com/zcayou/go-tools/golangci/zenum
-[zassert]: https://pkg.go.dev/github.com/zcayou/go-tools/golangci/zassert

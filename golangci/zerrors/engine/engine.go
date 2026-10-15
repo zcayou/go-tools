@@ -42,6 +42,9 @@ type Config struct {
 	// BuildTags are the build tags the module was loaded under, which the api
 	// patterns resolve under too.
 	BuildTags []string
+
+	// Disabled are rules that are not run. Every rule runs by default.
+	Disabled []Rule
 }
 
 // Finding is one diagnostic.
@@ -68,13 +71,25 @@ func Analyze(module *wholemodule.Module, cfg Config) ([]Finding, error) {
 		return nil, err
 	}
 
-	findings, err := a.unstructuredReturns()
-	if err != nil {
-		return nil, err
+	var findings []Finding
+	if a.runs(RuleUnstructuredReturn) {
+		findings, err = a.unstructuredReturns()
+		if err != nil {
+			return nil, err
+		}
 	}
-	findings = append(findings, a.textDecisions()...)
-	findings = append(findings, a.literalFields()...)
-	findings = append(findings, a.missingBases()...)
+	if a.runs(RuleTextDecision) {
+		findings = append(findings, a.textDecisions()...)
+	}
+	if a.runs(RuleLiteralField) {
+		findings = append(findings, a.literalFields()...)
+	}
+	if a.runs(RuleRenderedField) {
+		findings = append(findings, a.renderedFields()...)
+	}
+	if a.runs(RuleMissingBase) {
+		findings = append(findings, a.missingBases()...)
+	}
 
 	slices.SortFunc(findings, func(x, y Finding) int {
 		return cmp.Or(
@@ -84,4 +99,9 @@ func Analyze(module *wholemodule.Module, cfg Config) ([]Finding, error) {
 		)
 	})
 	return findings, nil
+}
+
+// runs reports whether the configuration leaves rule enabled.
+func (a *analysis) runs(rule Rule) bool {
+	return !slices.Contains(a.cfg.Disabled, rule)
 }

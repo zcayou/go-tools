@@ -38,6 +38,48 @@
 //     is what scopes reporting to the packages the user asked golangci-lint
 //     to lint.
 //
+// # Rules beside the verdicts
+//
+// The verdicts are the reachability analysis itself, reported under their own
+// tokens, and are not selectable: a module that wants none of them does not
+// enable deadcode. Beside them sit rules, which judge something further
+// and which the default, enable and disable keys choose among, as every linter
+// of this module chooses. A selection enabling none still leaves the verdicts.
+// There is one rule, and it is opt-in:
+//
+//   - inert-field: an exported field of a struct the module takes from its
+//     caller that no live module code reads. Such a field type-checks
+//     and round-trips, the caller sets it, and nothing happens.
+//
+// Which structs a caller hands in is derived by polarity from the api patterns,
+// which inert-field requires. The roots are the exported functions,
+// and the exported methods of exported non-interface types, of the api
+// packages: their parameters are authored by the caller and their results
+// handed to it. The walk crosses pointers, slices, arrays, map keys
+// and elements, channel elements, type arguments, and the underlying type
+// of a named non-struct type, and descends the exported and embedded fields
+// of every struct it reaches, staying inside the module. Crossing a func type,
+// or an exported method of an interface, flips its parameters' polarity, since
+// the other side supplies them, and keeps its results', so what a caller's
+// implementation returns is authored. An exported struct type reached authored
+// is a subject, and its exported fields are judged, with those a struct
+// it embeds by value promotes onto it.
+//
+// A read is a field selection that is not what an assignment writes,
+// in a function production roots reach, outside test files; a function only
+// tests keep alive does not act on the field. Reading a whole embedded value
+// reads every field it promotes. Converting a value to an interface reads every
+// exported field beneath it, since reflection can, so a subject that is printed
+// counts as read: the rule claims only what it can show. A read inside
+// a String, GoString or Format method, or inside a function echo-functions
+// lists, does not count: echoing a field into text or an identity does not act
+// on it. A field whose doc carries a Deprecated: paragraph is not judged, since
+// keeping a field that does nothing, so callers still compile, is what
+// deprecation means.
+//
+// It is opt-in because it judges an API's design rather than reachability,
+// and a field reserved for a later release is the module's decision.
+//
 // # What the plugin cannot do
 //
 // golangci-lint runs within one module, so a repository of sibling modules
@@ -96,6 +138,13 @@
 // package declares typed constants of, other than a flag set, a quantity
 // or a generic type, as internal/enum defines them — publishes a name per
 // member through a String method, used or not.
+//
+// echo-functions serves inert-field, naming functions whose reads echo
+// a field rather than act on it, each as import/path.Func,
+// import/path.Type.Method or import/path.(*Type).Method with a reason. Given
+// while inert-field is off, it fails building the plugin. An entry naming
+// no function of the module, or one whose exemption changes no verdict, fails
+// the run.
 //
 // An absent key and an empty list mean different things. Omitting patterns
 // analyzes the whole module; writing patterns: [] names no packages at all

@@ -1,6 +1,9 @@
 package engine
 
-import "strconv"
+import (
+	"strconv"
+	"strings"
+)
 
 // ConfigError is configuration zerrors rejects: settings that do not decode
 // or that no module could satisfy, which the plugin rejects before any analysis
@@ -17,14 +20,20 @@ type ConfigError struct {
 	// Value is the configured entry at fault.
 	Value string
 
-	// cause is what decoding the settings, or resolving an api pattern, ran
-	// into.
+	// cause is what decoding the settings, selecting rules, or resolving
+	// an api pattern ran into.
 	cause error
 }
 
 // Undecodable is settings that do not decode, for the reason cause gives.
 func Undecodable(cause error) *ConfigError {
 	return &ConfigError{Problem: ProblemUndecodable, cause: cause}
+}
+
+// RuleSelection is a rule selection that means nothing, for the reason cause
+// gives, which names the key.
+func RuleSelection(cause error) *ConfigError {
+	return &ConfigError{Problem: ProblemRuleSelection, cause: cause}
 }
 
 func (e *ConfigError) Error() string {
@@ -48,6 +57,8 @@ func (e *ConfigError) Error() string {
 		}
 	case ProblemWithoutBase:
 		return setting + " is set without base, so it scopes nothing"
+	case ProblemRuleSelection, ProblemServesNoRule:
+		return e.selection()
 	case ProblemMalformed:
 		return entry + e.malformed()
 	case ProblemNoReason:
@@ -81,6 +92,21 @@ func (e *ConfigError) Error() string {
 	}
 }
 
+// selection says what is wrong with the rule selection, or with a setting
+// it leaves serving nothing.
+func (e *ConfigError) selection() string {
+	switch {
+	case e.Problem == ProblemServesNoRule:
+		return e.Setting.String() + " configures only " + ruleList(e.Setting.Serves()) +
+			", which the rule selection leaves off"
+	case e.cause == nil:
+		// The selection names its own key.
+		return "the rule selection means nothing"
+	default:
+		return e.cause.Error()
+	}
+}
+
 // malformed says what form the setting's entries take.
 func (e *ConfigError) malformed() string {
 	switch e.Setting {
@@ -107,8 +133,8 @@ func (e *ConfigError) unresolved() string {
 	}
 }
 
-// Unwrap returns what decoding the settings, or resolving an api pattern, ran
-// into.
+// Unwrap returns what decoding the settings, selecting rules, or resolving
+// an api pattern ran into.
 func (e *ConfigError) Unwrap() error {
 	return e.cause
 }
@@ -127,6 +153,8 @@ const (
 	SettingBase
 	// SettingBasePackages is base-packages.
 	SettingBasePackages
+	// SettingSentinels is sentinels.
+	SettingSentinels
 )
 
 // String is the setting's key.
@@ -142,9 +170,40 @@ func (s Setting) String() string {
 		return "base"
 	case SettingBasePackages:
 		return "base-packages"
+	case SettingSentinels:
+		return "sentinels"
 	default:
 		return "Setting(" + strconv.Itoa(int(s)) + ")"
 	}
+}
+
+// Serves returns the rules a setting configures, or nil for a setting
+// that configures whichever run.
+func (s Setting) Serves() []Rule {
+	switch s {
+	case SettingAPI:
+		return []Rule{RuleUnstructuredReturn, RuleLiteralField, RuleRenderedField}
+	case SettingTrusted, SettingProtocols, SettingSentinels:
+		return []Rule{RuleUnstructuredReturn}
+	case SettingBase:
+		return []Rule{RuleUnstructuredReturn, RuleMissingBase}
+	case SettingBasePackages:
+		return []Rule{RuleMissingBase}
+	default:
+		return nil
+	}
+}
+
+// ruleList joins rule tokens for a message, as a sentence lists them.
+func ruleList(rules []Rule) string {
+	names := make([]string, len(rules))
+	for i, rule := range rules {
+		names[i] = rule.String()
+	}
+	if len(names) < 2 {
+		return strings.Join(names, "")
+	}
+	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
 }
 
 // Problem is why a configuration is rejected.
@@ -174,6 +233,12 @@ const (
 	// ProblemWithoutBase is base-packages set while base is not, which scopes
 	// a rule that is off.
 	ProblemWithoutBase
+	// ProblemRuleSelection is a rule selection that means nothing, which
+	// the cause says how.
+	ProblemRuleSelection
+	// ProblemServesNoRule is a setting given while every rule it configures
+	// is off, so it configures nothing.
+	ProblemServesNoRule
 )
 
 // String is the problem's token.
@@ -197,6 +262,10 @@ func (p Problem) String() string {
 		return "exempts-nothing"
 	case ProblemWithoutBase:
 		return "without-base"
+	case ProblemRuleSelection:
+		return "rule-selection"
+	case ProblemServesNoRule:
+		return "serves-no-rule"
 	default:
 		return "Problem(" + strconv.Itoa(int(p)) + ")"
 	}

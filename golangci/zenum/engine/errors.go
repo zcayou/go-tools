@@ -14,6 +14,8 @@ const (
 	// SettingRelatedEnums lists pairs whose tokens overlap because they classify
 	// different things.
 	SettingRelatedEnums
+	// SettingOrderedEnums lists enums whose ordinals are an order.
+	SettingOrderedEnums
 )
 
 func (s Setting) String() string {
@@ -24,6 +26,8 @@ func (s Setting) String() string {
 		return "zero-defaults"
 	case SettingRelatedEnums:
 		return "related-enums"
+	case SettingOrderedEnums:
+		return "ordered-enums"
 	default:
 		return fmt.Sprintf("Setting(%d)", int(s))
 	}
@@ -43,6 +47,9 @@ const (
 	// FaultNotRestated is a related-enums pair whose tokens do not overlap the way
 	// restated reports.
 	FaultNotRestated
+	// FaultNotOrdered is an ordered-enums entry for an enum nothing outside its
+	// package orders.
+	FaultNotOrdered
 )
 
 func (f Fault) String() string {
@@ -53,6 +60,8 @@ func (f Fault) String() string {
 		return "no-zero-member"
 	case FaultNotRestated:
 		return "not-restated"
+	case FaultNotOrdered:
+		return "not-ordered"
 	default:
 		return fmt.Sprintf("Fault(%d)", int(f))
 	}
@@ -86,6 +95,8 @@ func (e *ExceptionError) Error() string {
 		return fmt.Sprintf("%s: %s has no member at zero", e.Setting, e.Type)
 	case FaultNotRestated:
 		return fmt.Sprintf("%s: %s and %s do not restate each other's tokens", e.Setting, e.Type, e.Related)
+	case FaultNotOrdered:
+		return fmt.Sprintf("%s: nothing outside %s's package orders it", e.Setting, e.Type)
 	default:
 		return fmt.Sprintf("%s: %s suppresses nothing", e.Setting, e.Type)
 	}

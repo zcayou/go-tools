@@ -7,6 +7,7 @@ import (
 	"github.com/golangci/plugin-module-register/register"
 	"golang.org/x/tools/go/analysis"
 
+	"github.com/zcayou/go-tools/golangci/internal/ruleset"
 	"github.com/zcayou/go-tools/golangci/internal/wholemodule"
 	"github.com/zcayou/go-tools/golangci/zerrors/engine"
 )
@@ -19,6 +20,10 @@ const Name = "zerrors"
 // Settings is the decoded linters.settings.custom.zerrors.settings block.
 // Decoding rejects keys it does not know, so an unrecognized key fails the run.
 type Settings struct {
+	// Selection chooses which rules run, through the default, enable and disable
+	// keys. Every rule is standard.
+	ruleset.Selection
+
 	// API are package patterns, resolved against the module root, narrowing
 	// the API packages: those whose exported functions and types are judged,
 	// and whose exported error types and sentinels a caller can name. Omit the key
@@ -115,6 +120,13 @@ func (p *Plugin) GetLoadMode() string {
 // configFrom validates the settings no module could satisfy, and supplies
 // the defaults.
 func configFrom(s Settings) (engine.Config, error) {
+	rules, err := catalog.Resolve(s.Selection)
+	if err != nil {
+		return engine.Config{}, engine.RuleSelection(err)
+	}
+	if err := s.serving(rules); err != nil {
+		return engine.Config{}, err
+	}
 	if s.API != nil && len(s.API) == 0 {
 		return engine.Config{}, &engine.ConfigError{Setting: engine.SettingAPI, Problem: engine.ProblemEmpty}
 	}
@@ -172,8 +184,39 @@ func configFrom(s Settings) (engine.Config, error) {
 		Base:         base,
 		BasePackages: s.BasePackages,
 		BuildTags:    s.BuildTags,
+		Disabled:     rules.Disabled(catalog),
 	}, nil
 }
+
+// serving rejects a setting given while every rule it configures is off,
+// since it then configures nothing.
+func (s Settings) serving(rules ruleset.Enabled[engine.Rule]) error {
+	for _, given := range []struct {
+		setting engine.Setting
+		set     bool
+	}{
+		{engine.SettingAPI, s.API != nil},
+		{engine.SettingTrusted, s.Trusted != nil},
+		{engine.SettingProtocols, s.Protocols != nil},
+		{engine.SettingSentinels, s.Sentinels != nil},
+		{engine.SettingBase, s.Base != nil},
+		{engine.SettingBasePackages, s.BasePackages != nil},
+	} {
+		if given.set && !rules.Any(given.setting.Serves()...) {
+			return &engine.ConfigError{Setting: given.setting, Problem: engine.ProblemServesNoRule}
+		}
+	}
+	return nil
+}
+
+// catalog is the rules a selection chooses from.
+var catalog = ruleset.Catalog[engine.Rule]{Rules: []engine.Rule{
+	engine.RuleUnstructuredReturn,
+	engine.RuleTextDecision,
+	engine.RuleLiteralField,
+	engine.RuleRenderedField,
+	engine.RuleMissingBase,
+}}
 
 // qualifiedName reports whether text is written import/path.Name.
 func qualifiedName(text string) bool {

@@ -27,6 +27,13 @@ type Config struct {
 	// RelatedEnums are pairs whose tokens overlap because they classify different
 	// things, which restated then leaves alone.
 	RelatedEnums []Pair
+
+	// OrderedEnums are enums whose ordinals are an order, which ordered-comparison
+	// then leaves alone.
+	OrderedEnums []string
+
+	// Disabled are rules that report nothing. Every rule runs by default.
+	Disabled []Rule
 }
 
 // Pair is two enums, unordered.
@@ -64,14 +71,18 @@ func (f Finding) Message() string {
 // with an [*ExceptionError], or several joined, and no findings.
 func Analyze(module *wholemodule.Module, cfg Config) ([]Finding, error) {
 	a := newAnalysis(module)
+	a.disabled = cfg.Disabled
 	stale := a.exceptions(cfg)
 	functions := a.functions()
+	a.inferPrinters(functions)
 	a.see(functions)
 	a.declarations()
 	stale = append(stale, a.restatements(cfg.RelatedEnums)...)
 	a.renderings(functions)
 	a.syntax()
+	stale = append(stale, a.unordered(cfg)...)
 	a.instantiated(functions)
+	a.instantiatedFormats(functions)
 
 	if len(stale) == 1 {
 		return nil, stale[0]
@@ -104,11 +115,24 @@ type analysis struct {
 	// carriage memoizes what each type carries.
 	carriage *carriage
 
-	// generic holds each conversion to a type parameter the syntax writes,
+	// generic holds each conversion to or from a type parameter the syntax writes,
 	// by the position of its opening parenthesis, which is where an SSA conversion
 	// instruction says it was written.
 	generic map[token.Pos]genericConversion
 
+	// modulePaths are the import paths of the module's packages.
+	modulePaths map[string]bool
+
+	// printers are the module's functions, methods and interface methods
+	// that format their operands as fmt does.
+	printers map[*types.Func]printer
+
+	// genericFormats holds each printer's call in a generic body formatting
+	// a type parameter's value, by the position of its opening parenthesis,
+	// which is where an SSA call instruction says it was written.
+	genericFormats map[token.Pos]genericFormat
+
+	disabled []Rule
 	findings []Finding
 	reported map[Finding]bool
 }
@@ -117,16 +141,19 @@ type analysis struct {
 // out.
 func newAnalysis(module *wholemodule.Module) *analysis {
 	a := &analysis{
-		module:   module,
-		byType:   map[*types.Named]*enumType{},
-		byName:   map[*types.Func]*enumType{},
-		carriage: newCarriage(),
-		generic:  map[token.Pos]genericConversion{},
-		reported: map[Finding]bool{},
+		module:         module,
+		modulePaths:    map[string]bool{},
+		byType:         map[*types.Named]*enumType{},
+		byName:         map[*types.Func]*enumType{},
+		carriage:       newCarriage(),
+		generic:        map[token.Pos]genericConversion{},
+		genericFormats: map[token.Pos]genericFormat{},
+		reported:       map[Finding]bool{},
 	}
 	pkgs := slices.Clone(module.Packages)
 	slices.SortFunc(pkgs, func(x, y *packages.Package) int { return cmp.Compare(x.PkgPath, y.PkgPath) })
 	for _, pkg := range pkgs {
+		a.modulePaths[pkg.PkgPath] = true
 		for _, declared := range enum.Declared(enum.Package{Fset: pkg.Fset, Files: pkg.Syntax, Types: pkg.Types, Info: pkg.TypesInfo}) {
 			if !declared.Ordinal() && !declared.Textual() {
 				continue
@@ -151,7 +178,7 @@ func (a *analysis) report(pos token.Pos, rule Rule, v *enumType, detail string) 
 		Enum:   v.qualified,
 		Detail: detail,
 	}
-	if !finding.Pos.IsValid() || a.reported[finding] {
+	if !finding.Pos.IsValid() || a.reported[finding] || slices.Contains(a.disabled, rule) {
 		return
 	}
 	a.reported[finding] = true

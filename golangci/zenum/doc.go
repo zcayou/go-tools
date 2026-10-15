@@ -57,8 +57,11 @@
 //     in import-path-then-name order, and names the earlier.
 //   - token-decision: a text decision on a rendered token — on v.String(),
 //     string(v) of a string enum, or fmt.Sprint(v) of an enum value. Also
-//     an enum value compared or switched against a constant no member holds,
-//     as k == 7 where k == Running was meant.
+//     an enum value compared or switched against a constant that names no
+//     member: one no member holds, as k == 7 where k == Running was meant, and,
+//     outside the declaring package, one spelling a member's value, as k == 2
+//     where KindB holds 2, which keeps comparing with 2 after the constants
+//     are renumbered.
 //   - forged-conversion: a conversion into an enum, outside its declaring
 //     package, of anything but a constant holding a member's value or zero.
 //     Kind(n) makes a value no declaration names. Parsing a token or decoding
@@ -71,12 +74,59 @@
 //     parameter that an instantiation with the enum turns into one, as in T(n)
 //     in Convert[Kind]; a constant operand folds away there, so only a computed
 //     one is seen.
-//   - numeric-verb: an ordinal enum value formatted by a fmt-style call under
-//     %d, %x, %X, %o, %b, %c or %U. Those print the ordinal, or the bytes
-//     of the name in hex, and never the member's name. A method of the enum's
-//     own type is exempt for its own values: its String printing a value no
-//     member holds as "Kind(%d)" is the one place the ordinal should print,
-//     and %v there would call String again.
+//   - numeric-verb: an ordinal enum value a printer formats under %d, %x, %X,
+//     %o, %b, %c or %U. Those print the ordinal, or the bytes of the name
+//     in hex, and never the member's name. A method of the enum's own type
+//     is exempt for its own values: its String printing a value no member holds
+//     as "Kind(%d)" is the one place the ordinal should print, and %v there
+//     would call String again.
+//   - string-bypass: an ordinal enum value a printer formats for its name,
+//     under %v, %s or %q, where fmt calls no String: beneath an unexported
+//     field, whose methods fmt cannot call, or as the elements of a slice
+//     or array whose kind is uint8 under %s or %q, which fmt prints as raw
+//     bytes. %#v asks for Go syntax and is not judged.
+//   - laundered-conversion: an ordinal enum value converted, outside its
+//     declaring package, to a non-interface type other than its own and other
+//     than another enum's, which is forged-conversion's. int(kind) keeps
+//     the member's ordinal and drops its type: the number travels into a row,
+//     a label or a key nothing ties back to the declaration assigning it,
+//     and changes when a member is inserted. The declaring package owns its
+//     encoding in both directions. A conversion handed directly
+//     to a sync/atomic integer's Store, Swap, CompareAndSwap or Add keeps
+//     the ordinal without reading it, and comes back a member only through
+//     a conversion into the enum, which forged-conversion judges. A conversion
+//     to or from a type parameter is judged in each instantiation, and reported
+//     where the generic body writes it.
+//   - ordered-comparison: an ordinal enum ordered outside its declaring
+//     package, by <, <=, > or >= or by the min or max builtin, unless
+//     ordered-enums lists it. Most enums are unordered sets that happen
+//     to be numbered: State > Running assumes declaration order is lifecycle
+//     order, and silently admits whatever member is inserted between them. Only
+//     an ordering written on the enum's own type is judged. An ordering
+//     of a type parameter, and so a sort instantiated with the enum, decides no
+//     membership.
+//
+// # Formatting
+//
+// numeric-verb and string-bypass judge every printer's operands. A printer
+// is one of the standard-library functions and methods vet's printf analyzer
+// knows by name; a module function or method that forwards its final ...any
+// parameter, spread and unaltered, to a printer, found to a fixed point as vet
+// finds wrappers, printf kind when it also forwards the string before
+// it as the format; a method of a module interface every module type converted
+// to it implements with a printer of one kind; or a foreign function or method
+// whose body the load does not hold, when its name ends in f and its parameters
+// end in a format string and ...any. A print-kind printer formats every operand
+// as %v.
+//
+// An operand is judged for everything fmt descends into under its verb: struct
+// fields, exported or not, slice and array elements, map keys and values,
+// and a pointer's target at the top level. fmt stops at a value it hands
+// to the value's own method — a Formatter under every verb, an error
+// or Stringer under %v, %s, %q, %x and %X — but only where it can call one,
+// which is nowhere beneath an unexported field. An operand whose type holds
+// a type parameter is judged in each instantiation the module makes,
+// and reported where the generic body passes it.
 //
 // # Tokens
 //
@@ -151,7 +201,9 @@
 // A member named, under its own name or a re-exported one, is what such
 // a comparison should say. Zero spelled any other way is a presence check while
 // zero is no member, and is reported once zero is one, because it is then
-// that member spelled as a number.
+// that member spelled as a number. Any other member's value spelled as a number
+// is reported outside the declaring package, which owns the numbering
+// and may spell it, as stringer's generated String does.
 //
 // # Settings
 //
@@ -165,22 +217,32 @@
 //	    - {type: example.com/policy.Mode, reason: zero is the documented default}
 //	  related-enums:
 //	    - {first: example.com/a.Status, second: example.com/b.State, reason: ...}
+//	  ordered-enums:
+//	    - {type: example.com/log.Level, reason: severity rises with the ordinal}
 //	  build-tags: [integration]
 //
 // open-enums takes a type whose values come from outside the module, declaring
 // a few well-known constants, out of every rule. zero-defaults exempts an enum
 // whose zero member is its documented default from zero-member. related-enums
 // exempts a pair, in either order, whose tokens overlap because they classify
-// different things from restated. build-tags repeats golangci-lint's
-// run.build-tags, which a plugin cannot read.
+// different things from restated. ordered-enums exempts an enum whose ordinals
+// are an order, as a severity's are, from ordered-comparison. build-tags
+// repeats golangci-lint's run.build-tags, which a plugin cannot read.
+//
+// Every rule is standard, and the default, enable and disable keys choose which
+// run, as every linter of this module chooses. zero-defaults serves
+// zero-member, related-enums serves restated, and ordered-enums serves
+// ordered-comparison; giving one while the rule it serves is off configures
+// nothing, and fails [New].
 //
 // An entry with an empty reason, or naming a type other than
 // as import/path.Name, fails [New]. An entry that suppresses nothing fails
 // the run, because configuration matching nothing does not mean what it says:
 // a type that is no enum of the module, a zero-defaults type with no member
-// at zero, and a related pair that does not restate. Whether a type is an enum
-// takes the module to answer, which golangci-lint constructs a plugin without,
-// so those wait for the analysis.
+// at zero, a related pair that does not restate, and an ordered-enums type
+// nothing outside its package orders. Whether a type is an enum takes
+// the module to answer, which golangci-lint constructs a plugin without, so
+// those wait for the analysis.
 //
 // A one-off exception is not a setting. golangci-lint applies the nolint
 // directive centrally, matched on the linter name, so a "nolint:zenum" comment

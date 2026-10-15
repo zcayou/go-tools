@@ -75,8 +75,10 @@ func (a *analysis) textual(from, to types.Type) *enumType {
 // places, at the expression the constant is written as. A member named,
 // under its own name or a re-exported one, is what the comparison should say.
 // Any other spelling of zero is a presence check, unless zero is a member:
-// then it is that member, spelled as a number. Any other spelling is fine only
-// while some member holds the value.
+// then it is that member, spelled as a number. Any other spelling is reported,
+// a member's value included, since it compares right only while the numbering
+// holds; the declaring package, which owns the numbering, may spell a member's
+// value, as stringer's String does.
 func (a *analysis) comparison(info *types.Info, v *enumType, expr ast.Expr, pos token.Pos) {
 	value := info.Types[expr].Value
 	if a.namesMember(info, v, expr) {
@@ -90,7 +92,13 @@ func (a *analysis) comparison(info *types.Info, v *enumType, expr ast.Expr, pos 
 		}
 		return
 	}
-	if v.Member(value) {
+	if member := v.member(value); member != nil {
+		if info == v.pkg.TypesInfo {
+			return
+		}
+		a.report(pos, RuleTokenDecision, v, fmt.Sprintf(
+			"compares %s with %s, which is %s's value; compare with %s",
+			v.display(), value.ExactString(), member.Name(), member.Name()))
 		return
 	}
 	a.report(pos, RuleTokenDecision, v, fmt.Sprintf(

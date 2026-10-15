@@ -1,10 +1,13 @@
 package deadcode
 
 import (
+	"strings"
+
 	"github.com/golangci/plugin-module-register/register"
 	"golang.org/x/tools/go/analysis"
 
 	"github.com/zcayou/go-tools/golangci/deadcode/engine"
+	"github.com/zcayou/go-tools/golangci/internal/ruleset"
 	"github.com/zcayou/go-tools/golangci/internal/wholemodule"
 )
 
@@ -16,6 +19,11 @@ const Name = "deadcode"
 // Settings is the decoded linters.settings.custom.deadcode.settings block.
 // Decoding rejects keys it does not know, so an unrecognized key fails the run.
 type Settings struct {
+	// Selection chooses which rules beside the verdicts run, through the default,
+	// enable and disable keys. The verdicts are the linter itself and are not
+	// selectable. inert-field, the one such rule, is opt-in.
+	ruleset.Selection
+
 	// Patterns are the package patterns to analyze, resolved against the module
 	// root rather than the working directory. Omit the key to analyze ./..., which
 	// is the whole module; an explicitly empty list is rejected rather than read
@@ -93,6 +101,18 @@ type Settings struct {
 	// and references count as production evidence, and nothing in it is ever
 	// reported.
 	Roots []string `json:"roots"`
+
+	// EchoFunctions are functions whose reads of a field echo it into text
+	// or an identity rather than act on it, so inert-field does not count them.
+	// Each entry carries a reason. It serves inert-field.
+	EchoFunctions []EchoFunction `json:"echo-functions"`
+}
+
+// EchoFunction names a function as import/path.Func, import/path.Type.Method
+// or import/path.(*Type).Method, and why its reads do not act on a field.
+type EchoFunction struct {
+	Function string `json:"function"`
+	Reason   string `json:"reason"`
 }
 
 // Plugin adapts the whole-program engine to golangci-lint's per-package linter
@@ -141,6 +161,10 @@ func (p *Plugin) GetLoadMode() string {
 
 // configFrom validates the settings.
 func configFrom(s Settings) (engine.Config, error) {
+	rules, err := rulesFrom(s)
+	if err != nil {
+		return engine.Config{}, err
+	}
 	exempts, err := exemptions(s)
 	if err != nil {
 		return engine.Config{}, err
@@ -180,6 +204,24 @@ func configFrom(s Settings) (engine.Config, error) {
 		}
 	}
 
+	var echoes []string
+	for _, entry := range s.EchoFunctions {
+		if strings.TrimSpace(entry.Function) == "" {
+			return engine.Config{}, &engine.ConfigError{
+				Setting: engine.SettingEchoFunctions, Problem: engine.ProblemNamesNoFunction,
+			}
+		}
+		if strings.TrimSpace(entry.Reason) == "" {
+			return engine.Config{}, &engine.ConfigError{
+				Setting: engine.SettingEchoFunctions, Problem: engine.ProblemUnexplained, Value: entry.Function,
+			}
+		}
+		echoes = append(echoes, entry.Function)
+	}
+	if s.EchoFunctions != nil && len(s.EchoFunctions) == 0 {
+		return engine.Config{}, &engine.ConfigError{Setting: engine.SettingEchoFunctions, Problem: engine.ProblemEmpty}
+	}
+
 	return engine.Config{
 		Patterns:         s.Patterns,
 		BuildTags:        s.BuildTags,
@@ -191,7 +233,39 @@ func configFrom(s Settings) (engine.Config, error) {
 		EnumNames:        s.EnumNames,
 		TestFacing:       s.TestFacing,
 		Roots:            s.Roots,
+		Rules:            rules,
+		EchoFunctions:    echoes,
 	}, nil
+}
+
+// catalog is the rules beside the verdicts a selection chooses from.
+// A selection enabling none of them still leaves the verdicts.
+var catalog = ruleset.Catalog[engine.Rule]{
+	Rules:  []engine.Rule{engine.RuleInertField},
+	OptIn:  []engine.Rule{engine.RuleInertField},
+	Beside: true,
+}
+
+// rulesFrom resolves the rule selection, and rejects a rule enabled without
+// what it requires and a setting serving no enabled rule.
+func rulesFrom(s Settings) ([]engine.Rule, error) {
+	enabled, err := catalog.Resolve(s.Selection)
+	if err != nil {
+		return nil, engine.RuleSelection(err)
+	}
+	if enabled.Has(engine.RuleInertField) && len(s.API) == 0 {
+		return nil, &engine.ConfigError{Rule: engine.RuleInertField, Problem: engine.ProblemRequiresAPI}
+	}
+	if s.EchoFunctions != nil && !enabled.Any(engine.SettingEchoFunctions.Serves()...) {
+		return nil, &engine.ConfigError{Setting: engine.SettingEchoFunctions, Problem: engine.ProblemServesNoRule}
+	}
+	var rules []engine.Rule
+	for _, rule := range catalog.Rules {
+		if enabled.Has(rule) {
+			rules = append(rules, rule)
+		}
+	}
+	return rules, nil
 }
 
 // exemptions validates api-exempt and supplies the default. An absent key

@@ -46,16 +46,17 @@ func (h held) union(other held) held {
 // holding works out what each constant-derived node holds. It runs after
 // the fixed point, so every value it reads is one the fixed point followed.
 type holding struct {
-	l     *literals
-	nodes map[node]held
+	a      *analysis
+	origin literalOrigin
+	nodes  map[node]held
 
 	// zeroed holds the fields some module code makes a value of their struct
 	// without writing.
 	zeroed map[*types.Var]bool
 }
 
-func (l *literals) holding() *holding {
-	return &holding{l: l, nodes: map[node]held{}, zeroed: l.a.zeroedFields()}
+func newHolding(a *analysis, o literalOrigin) *holding {
+	return &holding{a: a, origin: o, nodes: map[node]held{}, zeroed: a.zeroedFields()}
 }
 
 // field returns what a field holds: what its stores write, and its zero value
@@ -83,16 +84,16 @@ func (h *holding) node(n node) held {
 	var found held
 	switch {
 	case n.field != nil:
-		if len(h.l.a.idx.elementStores[n.field]) > 0 {
+		if len(h.a.idx.elementStores[n.field]) > 0 {
 			found = held{many: true}
 		}
-		for _, store := range h.l.a.idx.fieldStores[n.field] {
+		for _, store := range h.a.idx.fieldStores[n.field] {
 			values = append(values, store.value)
 		}
 	case n.param != nil:
 		fn := n.param.Parent()
 		i := indexOf(fn.Params, n.param)
-		for _, site := range h.l.a.idx.calls[fn] {
+		for _, site := range h.a.idx.calls[fn] {
 			values = append(values, site.call.Args[i])
 		}
 	default:
@@ -162,7 +163,7 @@ func (h *holding) load(addr ssa.Value, visiting map[ssa.Value]bool) held {
 		return h.local(addr, visiting)
 	case *ssa.FreeVar:
 		var found held
-		for _, closure := range h.l.a.idx.closures[addr.Parent()] {
+		for _, closure := range h.a.idx.closures[addr.Parent()] {
 			if alloc, ok := closure.Bindings[indexOf(addr.Parent().FreeVars, addr)].(*ssa.Alloc); ok {
 				found = found.union(h.local(alloc, visiting))
 			}
@@ -224,7 +225,7 @@ func (h *holding) sliceLiteral(slice *ssa.Slice, visiting map[ssa.Value]bool) he
 // hold.
 func (h *holding) result(call *ssa.CallCommon, index int) held {
 	callee := call.StaticCallee()
-	if callee == nil || h.l.memberName(callee) {
+	if callee == nil || h.origin.memberName(callee) {
 		return held{many: true}
 	}
 	return h.node(node{fn: callee, index: index})

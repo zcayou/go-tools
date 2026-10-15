@@ -16,12 +16,15 @@ import (
 // a String, but print its bytes in hex, which is no member's name either.
 const bypassing = "dxXobcU"
 
-// formatting reports an ordinal enum value formatted by a fmt-style call
-// under a verb that bypasses its String. A fmt-style call is one to a function
-// or method whose name ends in f and whose last two parameters are a format
-// string and ...any, which covers fmt's own, log's, and wrappers written
-// in their image. Only a constant format can be read, and only operands
-// written out, not spread from a slice.
+// naming are the verbs under which fmt calls a value's String, where it can.
+const naming = "vsq"
+
+// formatting judges what a printer's call formats: each operand under the verb
+// that formats it, as a printf printer's constant format pairs them, or as %v
+// for a print printer. Only operands written out are judged, not ones spread
+// from a slice, and a printf printer's format is read only when it is constant.
+// An operand whose type holds a type parameter is judged again in each
+// instantiation the module makes.
 //
 // own is the enum whose method the call sits in, if any. Its values are not
 // judged there: its String printing a value no member holds as a number,
@@ -29,31 +32,99 @@ const bypassing = "dxXobcU"
 // would call that String again.
 func (a *analysis) formatting(info *types.Info, call *ast.CallExpr, own *enumType) {
 	callee, ok := typeutil.Callee(info, call).(*types.Func)
-	if !ok || !strings.HasSuffix(callee.Name(), "f") || call.Ellipsis.IsValid() {
+	if !ok || call.Ellipsis.IsValid() {
 		return
 	}
-	at, ok := formatParam(callee.Signature())
-	if !ok || at >= len(call.Args) {
+	p, ok := a.printerOf(callee)
+	if !ok {
 		return
 	}
-	format := info.Types[call.Args[at]].Value
+	operands := formattedOperands(info, call, p, callee.Signature())
+	var generic []formatted
+	for _, operand := range operands {
+		t := info.TypeOf(operand.expr)
+		a.judgeFormatted(operand, t, own)
+		if holdsTypeParam(t) {
+			generic = append(generic, operand)
+		}
+	}
+	if len(generic) > 0 {
+		a.genericFormats[call.Lparen] = genericFormat{operands: generic, own: own}
+	}
+}
+
+// formatted is one operand a printer's call formats, and the verb
+// it is formatted under.
+type formatted struct {
+	expr ast.Expr
+
+	// index is the operand's position among the call's variadic operands.
+	index int
+
+	verb  rune
+	sharp bool
+}
+
+// formattedOperands pairs each operand of a printer's call with the verb
+// that formats it.
+func formattedOperands(info *types.Info, call *ast.CallExpr, p printer, sig *types.Signature) []formatted {
+	variadic := sig.Params().Len() - 1
+	if len(call.Args) <= variadic {
+		return nil
+	}
+	operands := call.Args[variadic:]
+	if !p.printf() {
+		found := make([]formatted, len(operands))
+		for i, operand := range operands {
+			found[i] = formatted{expr: operand, index: i, verb: 'v'}
+		}
+		return found
+	}
+	format := info.Types[call.Args[p.format]].Value
 	if format == nil || format.Kind() != constant.String {
+		return nil
+	}
+	var found []formatted
+	for _, d := range directives(constant.StringVal(format), len(operands)) {
+		found = append(found, formatted{expr: operands[d.operand], index: d.operand, verb: d.verb, sharp: d.sharp})
+	}
+	return found
+}
+
+// judgeFormatted reports what fmt prints of an operand of type t that is no
+// member's name.
+func (a *analysis) judgeFormatted(operand formatted, t types.Type, own *enumType) {
+	pos := operand.expr.Pos()
+	numeric := strings.ContainsRune(bypassing, operand.verb)
+	named := strings.ContainsRune(naming, operand.verb) && !operand.sharp
+	if !numeric && !named {
 		return
 	}
-	operands := call.Args[at+1:]
-	for _, directive := range directives(constant.StringVal(format), len(operands)) {
-		if !strings.ContainsRune(bypassing, directive.verb) {
+	for _, reached := range a.reach(t, operand.verb) {
+		if reached.enum == own {
 			continue
 		}
-		operand := operands[directive.operand]
-		v := a.enumOf(info.TypeOf(operand))
-		if v == nil || v == own || !v.Ordinal() {
-			continue
+		switch {
+		case numeric:
+			a.report(pos, RuleNumericVerb, reached.enum, fmt.Sprintf(
+				"formats %s under %%%c, which prints its ordinal rather than its member's name; use %%v or %%s",
+				reached.enum.display(), operand.verb))
+		case reached.bytes != nil && operand.verb != 'v':
+			a.report(pos, RuleStringBypass, reached.enum, fmt.Sprintf(
+				"formats %s as the elements of %s under %%%c, which fmt prints as raw bytes; format it with %%v",
+				reached.enum.display(), types.TypeString(reached.bytes, a.qualifier), operand.verb))
+		case reached.field != "":
+			a.report(pos, RuleStringBypass, reached.enum, fmt.Sprintf(
+				"formats %s beneath the unexported field %s, where fmt calls no String; "+
+					"export the field, or format the field itself",
+				reached.enum.display(), reached.field))
 		}
-		a.report(operand.Pos(), RuleNumericVerb, v, fmt.Sprintf(
-			"formats %s under %%%c, which prints its ordinal rather than its member's name; use %%v or %%s",
-			v.display(), directive.verb))
 	}
+}
+
+// qualifier writes a type's package by its name, as source code spells it.
+func (a *analysis) qualifier(pkg *types.Package) string {
+	return pkg.Name()
 }
 
 // formatParam returns the index of a fmt-style signature's format parameter:
@@ -73,9 +144,11 @@ func formatParam(sig *types.Signature) (int, bool) {
 }
 
 // directive is one verb of a format string, and the operand it formats.
+// sharp is the # flag, which asks for Go syntax under %v.
 type directive struct {
 	verb    rune
 	operand int
+	sharp   bool
 }
 
 // directives pairs each verb of a format string with the operand it formats,
@@ -95,7 +168,9 @@ func directives(format string, operands int) []directive {
 		}
 		p.i++
 		p.good = true
+		sharp := false
 		for p.i < len(format) && strings.IndexByte("#0+- ", format[p.i]) >= 0 {
+			sharp = sharp || format[p.i] == '#'
 			p.i++
 		}
 		afterIndex := p.argIndex()
@@ -131,7 +206,7 @@ func directives(format string, operands int) []directive {
 		if verb == '%' || !p.good || p.arg >= operands {
 			continue
 		}
-		found = append(found, directive{verb: verb, operand: p.arg})
+		found = append(found, directive{verb: verb, operand: p.arg, sharp: sharp})
 		p.arg++
 	}
 	return found

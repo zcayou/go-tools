@@ -2,6 +2,7 @@ package engine_test
 
 import (
 	"errors"
+	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -35,9 +36,30 @@ var _ = Describe("Analyze", func() {
 		))
 	})
 
+	It("reports nothing a disabled rule finds, and everything the others do", func() {
+		all := analyzeFixture("restated", engine.Config{})
+		Expect(all).To(ContainElement(ContainSubstring(": restated: ")))
+
+		disabled := analyzeFixture("restated", engine.Config{Disabled: []engine.Rule{engine.RuleRestated}})
+
+		Expect(disabled).NotTo(ContainElement(ContainSubstring(": restated: ")))
+		Expect(disabled).To(HaveLen(len(all) - countContaining(all, ": restated: ")))
+	})
+
 	It("opens a finding's message with its rule", func() {
 		finding := engine.Finding{Rule: engine.RuleRestated, Detail: "b.Paint restates the tokens of a.Color"}
 
 		Expect(finding.Message()).To(Equal("restated: b.Paint restates the tokens of a.Color"))
 	})
 })
+
+// countContaining counts the rendered findings holding text.
+func countContaining(findings []string, text string) int {
+	n := 0
+	for _, finding := range findings {
+		if strings.Contains(finding, text) {
+			n++
+		}
+	}
+	return n
+}

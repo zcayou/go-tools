@@ -67,6 +67,36 @@ var _ = Describe("ConfigError", func() {
 		Entry("an unknown value of a setting with no closed set",
 			&engine.ConfigError{Setting: engine.SettingPatterns, Problem: engine.ProblemUnknownValue, Value: "x"},
 			`unknown patterns "x"`),
+		Entry("a rule without api",
+			&engine.ConfigError{Rule: engine.RuleInertField, Problem: engine.ProblemRequiresAPI},
+			"inert-field requires api"),
+		Entry("a rule selection, in the selection's words",
+			engine.RuleSelection(errors.New("enable: unknown rule \"inert\"")),
+			`enable: unknown rule "inert"`),
+		Entry("a rule selection, with nothing said",
+			&engine.ConfigError{Problem: engine.ProblemRuleSelection},
+			"the rule selection means nothing"),
+		Entry("a setting for a rule that is off",
+			&engine.ConfigError{Setting: engine.SettingEchoFunctions, Problem: engine.ProblemServesNoRule},
+			"echo-functions configures only inert-field, which the rule selection leaves off"),
+		Entry("an entry with no reason",
+			&engine.ConfigError{
+				Setting: engine.SettingEchoFunctions, Problem: engine.ProblemUnexplained, Value: "m/p.F",
+			},
+			"echo-functions entry m/p.F carries no reason"),
+		Entry("an entry naming no function",
+			&engine.ConfigError{
+				Setting: engine.SettingEchoFunctions, Problem: engine.ProblemNamesNoFunction, Value: "m/p.F",
+			},
+			`echo-functions entry "m/p.F" names no function of the module`),
+		Entry("an entry exempting nothing",
+			&engine.ConfigError{
+				Setting: engine.SettingEchoFunctions, Problem: engine.ProblemChangesNothing, Value: "m/p.F",
+			},
+			"echo-functions entry m/p.F changes no verdict"),
+		Entry("an empty echo-functions list",
+			&engine.ConfigError{Setting: engine.SettingEchoFunctions, Problem: engine.ProblemEmpty},
+			"echo-functions is empty: omit it to declare no echo functions"),
 		Entry("a problem outside the enum",
 			&engine.ConfigError{},
 			"Setting(0): Problem(0)"),
@@ -87,9 +117,10 @@ var _ = Describe("ConfigError", func() {
 		Expect([]string{
 			engine.SettingPatterns.String(), engine.SettingAPI.String(), engine.SettingAPIExempt.String(),
 			engine.SettingAPIGenerics.String(), engine.SettingAPITestConsumers.String(),
-			engine.SettingTestFacing.String(), engine.SettingRoots.String(),
+			engine.SettingTestFacing.String(), engine.SettingRoots.String(), engine.SettingEchoFunctions.String(),
 		}).To(Equal([]string{
 			"patterns", "api", "api-exempt", "api-generics", "api-test-consumers", "test-facing", "roots",
+			"echo-functions",
 		}))
 		Expect([]string{
 			engine.ProblemUndecodable.String(), engine.ProblemEmpty.String(), engine.ProblemUnknownValue.String(),
@@ -97,10 +128,16 @@ var _ = Describe("ConfigError", func() {
 			engine.ProblemUnresolvable.String(), engine.ProblemMatchesNothing.String(),
 			engine.ProblemOverlapsAPI.String(), engine.ProblemReservedDirectory.String(),
 			engine.ProblemUnreadable.String(), engine.ProblemNotMain.String(), engine.ProblemNoMain.String(),
+			engine.ProblemRuleSelection.String(), engine.ProblemServesNoRule.String(),
+			engine.ProblemUnexplained.String(), engine.ProblemNamesNoFunction.String(),
+			engine.ProblemChangesNothing.String(),
 		}).To(Equal([]string{
 			"undecodable", "empty", "unknown-value", "requires-api", "requires-tests", "unresolvable",
 			"matches-nothing", "overlaps-api", "reserved-directory", "unreadable", "not-main", "no-main",
+			"rule-selection", "serves-no-rule", "unexplained", "names-no-function", "changes-nothing",
 		}))
+		Expect(engine.SettingEchoFunctions.Serves()).To(Equal([]engine.Rule{engine.RuleInertField}))
+		Expect(engine.SettingAPI.Serves()).To(BeEmpty())
 	})
 })
 

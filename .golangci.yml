@@ -42,25 +42,13 @@ linters:
     - unparam
     - unused
     - deadcode
-    - testlayout
     - zlines
     - zerrors
     - zenum
-    - zassert
+    - ztest
 
   settings:
     custom:
-      testlayout:
-        type: module
-        description: Checks that test files follow the repository's test-suite layout conventions.
-        original-url: github.com/zcayou/go-tools
-        settings:
-          # Black-box remains the rule; the one whitebox file allowed is a
-          # spec-less export_test.go bridging package internals to the specs.
-          whitebox:
-            allowed: true
-            patterns: []
-            helper-patterns: [export_test.go]
       deadcode:
         type: module
         description: Reports code that nothing in the program can reach.
@@ -79,10 +67,17 @@ linters:
         type: module
         description: Reports enums that are not ordinal, named, or the only way to make their values.
         original-url: github.com/zcayou/go-tools
-      zassert:
+      ztest:
         type: module
-        description: Reports specs that assert an error occurred without saying which, or that assert its text.
+        description: Checks where tests live, and that specs assert which error and which member they got.
         original-url: github.com/zcayou/go-tools
+        settings:
+          # Black-box remains the rule; the one whitebox file allowed is a
+          # spec-less export_test.go bridging package internals to the specs.
+          whitebox:
+            allowed: true
+            patterns: []
+            helper-patterns: [export_test.go]
 
     depguard:
       rules:

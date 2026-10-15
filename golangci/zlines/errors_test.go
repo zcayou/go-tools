@@ -24,6 +24,11 @@ var _ = Describe("ConfigError", func() {
 			"zlines: comment-min-length 90 exceeds comment-length 80"),
 		Entry("an empty exempt prefix", map[string]any{"comment-exempt": []string{""}},
 			"zlines: comment-exempt must not hold an empty prefix"),
+		Entry("a rule selection that means nothing", map[string]any{"enable": []string{"comment-wrap"}},
+			`zlines: enable: "comment-wrap" is already enabled by default`),
+		Entry("a setting for a disabled rule",
+			map[string]any{"disable": []string{"comment-wrap"}, "comment-length": 80},
+			"zlines: comment-length configures only comment-wrap, which the rule selection leaves off"),
 	)
 
 	DescribeTable("renders what it can of a value no setting produced",
@@ -32,6 +37,9 @@ var _ = Describe("ConfigError", func() {
 		},
 		Entry("undecodable, with nothing said",
 			&zlines.ConfigError{Problem: zlines.ProblemUndecodable}, "zlines: settings do not decode"),
+		Entry("a rule selection, with nothing said",
+			&zlines.ConfigError{Problem: zlines.ProblemRuleSelection},
+			"zlines: the rule selection means nothing"),
 		Entry("a problem outside the enum", &zlines.ConfigError{}, "zlines: Setting(0): Problem(0)"),
 	)
 
@@ -44,6 +52,10 @@ var _ = Describe("ConfigError", func() {
 		Expect([]string{
 			zlines.ProblemUndecodable.String(), zlines.ProblemNotPositive.String(), zlines.ProblemNegative.String(),
 			zlines.ProblemMinimumPastLength.String(), zlines.ProblemEmptyPrefix.String(),
-		}).To(Equal([]string{"undecodable", "not-positive", "negative", "minimum-past-length", "empty-prefix"}))
+			zlines.ProblemRuleSelection.String(), zlines.ProblemServesNoRule.String(),
+		}).To(Equal([]string{
+			"undecodable", "not-positive", "negative", "minimum-past-length", "empty-prefix",
+			"rule-selection", "serves-no-rule",
+		}))
 	})
 })

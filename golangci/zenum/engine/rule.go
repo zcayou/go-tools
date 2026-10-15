@@ -33,6 +33,16 @@ const (
 	// RuleNumericVerb is an enum value formatted under a verb that bypasses
 	// its String.
 	RuleNumericVerb
+	// RuleStringBypass is an enum value formatted for its name where fmt calls
+	// no String: beneath an unexported field, or as the element of a uint8
+	// slice under %s or %q.
+	RuleStringBypass
+	// RuleLaunderedConversion is an enum value converted to another type
+	// outside its package, which keeps its ordinal and drops its type.
+	RuleLaunderedConversion
+	// RuleOrderedComparison is an ordering of an enum outside its package
+	// that ordered-enums does not list.
+	RuleOrderedComparison
 )
 
 func (r Rule) String() string {
@@ -55,6 +65,12 @@ func (r Rule) String() string {
 		return "forged-conversion"
 	case RuleNumericVerb:
 		return "numeric-verb"
+	case RuleStringBypass:
+		return "string-bypass"
+	case RuleLaunderedConversion:
+		return "laundered-conversion"
+	case RuleOrderedComparison:
+		return "ordered-comparison"
 	default:
 		return fmt.Sprintf("Rule(%d)", int(r))
 	}

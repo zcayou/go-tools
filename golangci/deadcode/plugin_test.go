@@ -9,6 +9,7 @@ import (
 
 	"github.com/zcayou/go-tools/golangci/deadcode"
 	"github.com/zcayou/go-tools/golangci/deadcode/engine"
+	"github.com/zcayou/go-tools/golangci/internal/ruleset"
 )
 
 var _ = Describe("Plugin", func() {
@@ -40,6 +41,7 @@ var _ = Describe("Plugin", func() {
 		Entry("enum names", map[string]any{"enum-names": true}),
 		Entry("test-facing under the default tests", map[string]any{"test-facing": []string{"./plugins/test/..."}}),
 		Entry("roots", map[string]any{"roots": []string{"tools/*.go"}}),
+		Entry("every rule off", map[string]any{"default": "none"}),
 	)
 
 	It("rejects an unknown key, which is a typo rather than a no-op", func() {
@@ -91,7 +93,55 @@ var _ = Describe("Plugin", func() {
 		Entry("an empty roots list means the files in it, of which there are none",
 			map[string]any{"roots": []string{}},
 			&engine.ConfigError{Setting: engine.SettingRoots, Problem: engine.ProblemEmpty}),
+		Entry("inert-field with no api to derive its subjects from",
+			map[string]any{"enable": []string{"inert-field"}},
+			&engine.ConfigError{Rule: engine.RuleInertField, Problem: engine.ProblemRequiresAPI}),
+		Entry("echo-functions while inert-field is off",
+			map[string]any{"echo-functions": []map[string]any{{"function": "m/p.F", "reason": "r"}}},
+			&engine.ConfigError{Setting: engine.SettingEchoFunctions, Problem: engine.ProblemServesNoRule}),
+		Entry("an echo function with no reason",
+			map[string]any{
+				"api": []string{"./..."}, "enable": []string{"inert-field"},
+				"echo-functions": []map[string]any{{"function": "m/p.F"}},
+			},
+			&engine.ConfigError{Setting: engine.SettingEchoFunctions, Problem: engine.ProblemUnexplained, Value: "m/p.F"}),
+		Entry("an echo-functions entry naming no function",
+			map[string]any{
+				"api": []string{"./..."}, "enable": []string{"inert-field"},
+				"echo-functions": []map[string]any{{"reason": "r"}},
+			},
+			&engine.ConfigError{Setting: engine.SettingEchoFunctions, Problem: engine.ProblemNamesNoFunction}),
+		Entry("an empty echo-functions list",
+			map[string]any{"api": []string{"./..."}, "enable": []string{"inert-field"}, "echo-functions": []any{}},
+			&engine.ConfigError{Setting: engine.SettingEchoFunctions, Problem: engine.ProblemEmpty}),
 	)
+
+	It("rejects a rule selection that means nothing, naming the key", func() {
+		_, err := deadcode.New(map[string]any{"disable": []string{"inert-field"}})
+
+		Expect(err).To(BeAssignableToTypeOf(&engine.ConfigError{}))
+		Expect(err).To(HaveField("Problem", engine.ProblemRuleSelection))
+		Expect(errors.Unwrap(err)).To(MatchError(
+			&ruleset.Error{Key: ruleset.KeyDisable, Problem: ruleset.ProblemNotEnabled, Value: "inert-field"}))
+	})
+
+	DescribeTable("hands the engine the rules beside the verdicts",
+		func(settings map[string]any, expected []engine.Rule) {
+			Expect(engineConfig(settings).Rules).To(Equal(expected))
+		},
+		Entry("none by default", map[string]any{}, []engine.Rule(nil)),
+		Entry("inert-field enabled", map[string]any{"api": []string{"./..."}, "enable": []string{"inert-field"}},
+			[]engine.Rule{engine.RuleInertField}),
+		Entry("every rule", map[string]any{"api": []string{"./..."}, "default": "all"},
+			[]engine.Rule{engine.RuleInertField}),
+	)
+
+	It("hands the engine the echo functions", func() {
+		Expect(engineConfig(map[string]any{
+			"api": []string{"./..."}, "enable": []string{"inert-field"},
+			"echo-functions": []map[string]any{{"function": "m/p.(*Spec).Fingerprint", "reason": "an identity"}},
+		}).EchoFunctions).To(Equal([]string{"m/p.(*Spec).Fingerprint"}))
+	})
 
 	DescribeTable("api exemptions",
 		func(settings map[string]any, expected []engine.Kind) {

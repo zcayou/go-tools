@@ -9,7 +9,6 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"github.com/onsi/gomega/types"
 
 	"github.com/zcayou/go-tools/golangci/deadcode/engine"
 )
@@ -42,6 +41,13 @@ var _ = Describe("Enums", func() {
 
 		finding.TestOnly = true
 		Expect(finding.Category()).To(Equal("test-only unused exported func"))
+	})
+
+	It("opens a message with the category, then names the declaration or says what the rule found", func() {
+		Expect(engine.Finding{Verdict: engine.VerdictUnusedFunc, Name: "Run"}.Message()).
+			To(Equal("unused exported func: Run"))
+		Expect(engine.Finding{Rule: engine.RuleInertField, Name: "Options.Retries", Detail: "it is inert"}.Message()).
+			To(Equal("inert-field: it is inert"))
 	})
 })
 
@@ -1309,15 +1315,4 @@ func analyzeWith(ctx SpecContext, name string, cfg engine.Config) []string {
 			rel, finding.Pos.Line, finding.Pos.Column, finding.Category(), finding.Name))
 	}
 	return reported
-}
-
-// beConfigError matches an [engine.ConfigError] for the setting, problem
-// and value, whatever cause it carries.
-func beConfigError(setting engine.Setting, problem engine.Problem, value string) types.GomegaMatcher {
-	return SatisfyAll(
-		BeAssignableToTypeOf(&engine.ConfigError{}),
-		HaveField("Setting", setting),
-		HaveField("Problem", problem),
-		HaveField("Value", value),
-	)
 }

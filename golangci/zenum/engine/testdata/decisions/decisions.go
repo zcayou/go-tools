@@ -55,4 +55,11 @@ func compared(k kinds.Kind, m kinds.Mode, l kinds.Level) {
 	}
 	if m == "" {
 	}
+	if k == 2 {
+	}
+	switch k {
+	case kinds.KindA + 1:
+	}
+	if m == "read" {
+	}
 }

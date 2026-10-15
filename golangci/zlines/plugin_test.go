@@ -8,6 +8,7 @@ import (
 	. "github.com/onsi/gomega"
 	"golang.org/x/tools/go/analysis"
 
+	"github.com/zcayou/go-tools/golangci/internal/ruleset"
 	"github.com/zcayou/go-tools/golangci/zlines"
 )
 
@@ -60,14 +61,14 @@ var _ = Describe("Plugin", func() {
 			To(BeEmpty())
 	})
 
-	It("takes the signature-wrap rule out of the run when asked to", func() {
-		Expect(analyze(analyzerFrom(map[string]any{"signature-wrap": false}), wrappedSignature).messages()).
+	It("takes the signature-wrap rule out of the run when the selection disables it", func() {
+		Expect(analyze(analyzerFrom(map[string]any{"disable": []string{"signature-wrap"}}), wrappedSignature).messages()).
 			To(BeEmpty())
 	})
 
-	It("takes the body-collapse rule out of the run when asked to", func() {
+	It("takes the body-collapse rule out of the run when the selection disables it", func() {
 		Expect(analyze(analyzerFrom(nil), collapsedBody).messages()).To(HaveLen(1))
-		Expect(analyze(analyzerFrom(map[string]any{"body-collapse": false}), collapsedBody).messages()).
+		Expect(analyze(analyzerFrom(map[string]any{"disable": []string{"body-collapse"}}), collapsedBody).messages()).
 			To(BeEmpty())
 	})
 
@@ -92,8 +93,8 @@ var _ = Describe("Plugin", func() {
 		Expect(analyze(analyzerFrom(settings), loneComment).messages()).To(HaveLen(1))
 	})
 
-	It("takes the comment-wrap rule out of the run when asked to", func() {
-		Expect(analyze(analyzerFrom(map[string]any{"comment-wrap": false}), shortComment).messages()).
+	It("takes the comment-wrap rule out of the run when the selection disables it", func() {
+		Expect(analyze(analyzerFrom(map[string]any{"disable": []string{"comment-wrap"}}), shortComment).messages()).
 			To(BeEmpty())
 	})
 
@@ -110,9 +111,9 @@ var _ = Describe("Plugin", func() {
 			"comment-length":     80,
 			"comment-min-length": 70,
 			"comment-overrun":    10,
-			"signature-wrap":     false,
-			"body-collapse":      false,
-			"comment-wrap":       false,
+			"default":            "all",
+			"enable":             []string{"signature-wrap"},
+			"disable":            []string{"body-collapse"},
 			"comment-exempt":     []string{"+kubebuilder"},
 		})
 
@@ -122,9 +123,9 @@ var _ = Describe("Plugin", func() {
 			CommentLength:    new(80),
 			CommentMinLength: new(70),
 			CommentOverrun:   new(10),
-			SignatureWrap:    new(false),
-			BodyCollapse:     new(false),
-			CommentWrap:      new(false),
+			Default:          new("all"),
+			Enable:           []string{"signature-wrap"},
+			Disable:          []string{"body-collapse"},
 			CommentExempt:    []string{"+kubebuilder"},
 		}))
 	})
@@ -198,6 +199,34 @@ var _ = Describe("Plugin", func() {
 			Setting: zlines.SettingCommentExempt, Problem: zlines.ProblemEmptyPrefix,
 		}))
 	})
+
+	It("rejects a rule selection that means nothing, naming the key", func() {
+		_, err := zlines.New(map[string]any{"disable": []string{"signature-wrap", "body-collapse", "comment-wrap"}})
+
+		Expect(err).To(BeAssignableToTypeOf(&zlines.ConfigError{}))
+		Expect(err).To(HaveField("Problem", zlines.ProblemRuleSelection))
+		Expect(errors.Unwrap(err)).To(MatchError(
+			&ruleset.Error{Key: ruleset.KeyDefault, Problem: ruleset.ProblemNoRuleEnabled}))
+	})
+
+	DescribeTable("rejects a setting whose every rule the selection leaves off",
+		func(settings map[string]any, setting zlines.Setting) {
+			_, err := zlines.New(settings)
+
+			Expect(err).To(MatchError(&zlines.ConfigError{Setting: setting, Problem: zlines.ProblemServesNoRule}))
+		},
+		Entry("line-length without signature-wrap",
+			map[string]any{"disable": []string{"signature-wrap"}, "line-length": 100}, zlines.SettingLineLength),
+		Entry("comment-length without comment-wrap",
+			map[string]any{"disable": []string{"comment-wrap"}, "comment-length": 100}, zlines.SettingCommentLength),
+		Entry("comment-min-length without comment-wrap",
+			map[string]any{"disable": []string{"comment-wrap"}, "comment-min-length": 70}, zlines.SettingCommentMinLength),
+		Entry("comment-overrun without comment-wrap",
+			map[string]any{"disable": []string{"comment-wrap"}, "comment-overrun": 5}, zlines.SettingCommentOverrun),
+		Entry("comment-exempt without comment-wrap",
+			map[string]any{"disable": []string{"comment-wrap"}, "comment-exempt": []string{"+k"}},
+			zlines.SettingCommentExempt),
+	)
 
 	It("exposes exactly the analyzer golangci-lint should run", func() {
 		plugin, err := zlines.New(nil)

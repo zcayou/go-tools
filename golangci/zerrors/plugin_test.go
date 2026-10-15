@@ -9,6 +9,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/zcayou/go-tools/golangci/internal/ruleset"
 	"github.com/zcayou/go-tools/golangci/zerrors"
 	"github.com/zcayou/go-tools/golangci/zerrors/engine"
 )
@@ -123,6 +124,49 @@ var _ = Describe("Plugin", func() {
 			BuildTags:    []string{"integration"},
 		}))
 	})
+
+	It("hands the engine the rules the selection leaves off", func() {
+		config := engineConfig(map[string]any{"disable": []string{"text-decision", "missing-base"}})
+
+		Expect(config.Disabled).To(Equal([]engine.Rule{engine.RuleTextDecision, engine.RuleMissingBase}))
+	})
+
+	It("rejects a rule selection that means nothing, naming the key", func() {
+		_, err := zerrors.New(map[string]any{"default": "none"})
+
+		Expect(err).To(BeAssignableToTypeOf(&engine.ConfigError{}))
+		Expect(err).To(HaveField("Problem", engine.ProblemRuleSelection))
+		Expect(errors.Unwrap(err)).To(MatchError(
+			&ruleset.Error{Key: ruleset.KeyDefault, Problem: ruleset.ProblemNoRuleEnabled}))
+	})
+
+	DescribeTable("rejects a setting whose every rule the selection leaves off",
+		func(settings map[string]any, setting engine.Setting) {
+			_, err := zerrors.New(settings)
+
+			Expect(err).To(MatchError(&engine.ConfigError{Setting: setting, Problem: engine.ProblemServesNoRule}))
+		},
+		Entry("api without unstructured-return, literal-field or rendered-field", map[string]any{
+			"disable": []string{"unstructured-return", "literal-field", "rendered-field"}, "api": []string{"./..."},
+		},
+			engine.SettingAPI),
+		Entry("trusted without unstructured-return",
+			map[string]any{"disable": []string{"unstructured-return"}, "trusted": []string{"example.com/x"}},
+			engine.SettingTrusted),
+		Entry("protocols without unstructured-return",
+			map[string]any{"disable": []string{"unstructured-return"}, "protocols": []map[string]any{
+				{"method": "example.com/lane.Acquirer.Acquire", "reason": "r"},
+			}},
+			engine.SettingProtocols),
+		Entry("sentinels without unstructured-return",
+			map[string]any{"disable": []string{"unstructured-return"}, "sentinels": false}, engine.SettingSentinels),
+		Entry("base without unstructured-return or missing-base",
+			map[string]any{"disable": []string{"unstructured-return", "missing-base"}, "base": "example.com/c.B"},
+			engine.SettingBase),
+		Entry("base-packages without missing-base", map[string]any{
+			"disable": []string{"missing-base"}, "base": "example.com/c.B", "base-packages": []string{"./..."},
+		}, engine.SettingBasePackages),
+	)
 
 	It("builds without touching the filesystem", func() {
 		// golangci-lint builds every configured plugin whether the run enables

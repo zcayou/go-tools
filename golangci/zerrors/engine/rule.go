@@ -21,6 +21,10 @@ const (
 
 	// RuleMissingBase is an error type that does not carry the configured base.
 	RuleMissingBase
+
+	// RuleRenderedField is a string field of an error type that only ever holds
+	// the String of one type its caller could carry instead.
+	RuleRenderedField
 )
 
 func (r Rule) String() string {
@@ -33,6 +37,8 @@ func (r Rule) String() string {
 		return "literal-field"
 	case RuleMissingBase:
 		return "missing-base"
+	case RuleRenderedField:
+		return "rendered-field"
 	default:
 		return "Rule(" + strconv.Itoa(int(r)) + ")"
 	}

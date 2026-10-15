@@ -32,6 +32,11 @@ type enumType struct {
 
 	// zeroDefault reports that zero-defaults lists it.
 	zeroDefault bool
+
+	// orderedEnum reports that ordered-enums lists it, and orderedOutside
+	// that something outside its package orders it.
+	orderedEnum    bool
+	orderedOutside bool
 }
 
 // display is the enum as a message names it: qualified by its package's
@@ -105,6 +110,13 @@ func (a *analysis) exceptions(cfg Config) []error {
 			stale = append(stale, &ExceptionError{Setting: SettingZeroDefaults, Fault: FaultNoZeroMember, Type: name})
 		default:
 			v.zeroDefault = true
+		}
+	}
+	for _, name := range cfg.OrderedEnums {
+		if v := a.lookup(name); v != nil {
+			v.orderedEnum = true
+		} else {
+			stale = append(stale, &ExceptionError{Setting: SettingOrderedEnums, Fault: FaultNotEnum, Type: name})
 		}
 	}
 	return stale

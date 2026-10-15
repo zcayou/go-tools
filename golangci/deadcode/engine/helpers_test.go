@@ -11,6 +11,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	gomegatypes "github.com/onsi/gomega/types"
 	"golang.org/x/tools/go/packages"
 
 	"github.com/zcayou/go-tools/golangci/deadcode/engine"
@@ -142,4 +143,15 @@ func fixtureDir(name string) string {
 	dir, err := filepath.Abs(filepath.Join("testdata", name))
 	Expect(err).NotTo(HaveOccurred())
 	return dir
+}
+
+// beConfigError matches an [engine.ConfigError] for the setting, problem
+// and value, whatever cause it carries.
+func beConfigError(setting engine.Setting, problem engine.Problem, value string) gomegatypes.GomegaMatcher {
+	return SatisfyAll(
+		BeAssignableToTypeOf(&engine.ConfigError{}),
+		HaveField("Setting", setting),
+		HaveField("Problem", problem),
+		HaveField("Value", value),
+	)
 }

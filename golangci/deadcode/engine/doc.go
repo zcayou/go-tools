@@ -444,6 +444,18 @@
 // is undefined rather than empty. Declaring an API surface is what gives such
 // a module production roots to measure against.
 //
+// # Inert fields
+//
+// [RuleInertField] runs after the verdicts, over what the production roots
+// reach: the masked view's reachability under [Config.Tests], and the full
+// view's otherwise. Its subjects come from walking the declared API's
+// signatures by polarity, each field attributed to the first root, in name
+// order, whose callers set it. Its reads come from the syntax, keyed
+// by declaration position so a test variant's re-check of a file counts once,
+// and from the conversions to an interface the built program makes, each
+// counted only in a function that reach holds. Its findings carry the rule
+// rather than a verdict, and follow every verdict's.
+//
 // # Load requirements
 //
 // The load must request syntax and type information for the whole transitive

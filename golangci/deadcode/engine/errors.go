@@ -31,6 +31,10 @@ type ConfigError struct {
 	// for [ProblemOverlapsAPI].
 	Packages []string
 
+	// Rule is the rule at fault, for [ProblemRequiresAPI] when a rule selection
+	// enables a rule that requires api.
+	Rule Rule
+
 	// cause is what the decoder, the loader, the file system, or the parser
 	// said.
 	cause error
@@ -40,6 +44,12 @@ type ConfigError struct {
 // into a [Config], carrying what its decoder said.
 func Undecodable(cause error) *ConfigError {
 	return &ConfigError{Problem: ProblemUndecodable, cause: cause}
+}
+
+// RuleSelection returns the [ConfigError] for a rule selection that means
+// nothing, for the reason cause gives, which names the key.
+func RuleSelection(cause error) *ConfigError {
+	return &ConfigError{Problem: ProblemRuleSelection, cause: cause}
 }
 
 func (e *ConfigError) Error() string {
@@ -60,10 +70,8 @@ func (e *ConfigError) Error() string {
 			return fmt.Sprintf("unknown %s %q: want one of %s", e.Setting, e.Value, choices)
 		}
 		return fmt.Sprintf("unknown %s %q", e.Setting, e.Value)
-	case ProblemRequiresAPI:
-		return fmt.Sprintf("%s requires api", e.Setting)
-	case ProblemRequiresTests:
-		return fmt.Sprintf("%s requires tests: the masked view is all it speaks to", e.Setting)
+	case ProblemRequiresAPI, ProblemRequiresTests:
+		return e.requirement()
 	case ProblemUnresolvable:
 		if e.cause == nil {
 			return fmt.Sprintf("resolving %s pattern %s", e.Setting, e.Value)
@@ -76,6 +84,34 @@ func (e *ConfigError) Error() string {
 		return fmt.Sprintf("%s pattern %s matched no packages", e.Setting, e.Value)
 	case ProblemOverlapsAPI:
 		return "declared both api and test-facing: " + strings.Join(e.Packages, ", ")
+	case ProblemReservedDirectory, ProblemUnreadable, ProblemNotMain, ProblemNoMain:
+		return e.rootProgram()
+	case ProblemRuleSelection, ProblemServesNoRule:
+		return e.selection()
+	case ProblemUnexplained, ProblemNamesNoFunction, ProblemChangesNothing:
+		return e.entry()
+	default:
+		return fmt.Sprintf("%s: %s", e.Setting, e.Problem)
+	}
+}
+
+// requirement says what a setting, or a rule a selection enables, is given
+// without.
+func (e *ConfigError) requirement() string {
+	subject := e.Setting.String()
+	if e.Rule != 0 {
+		subject = e.Rule.String()
+	}
+	if e.Problem == ProblemRequiresTests {
+		return subject + " requires tests: the masked view is all it speaks to"
+	}
+	return subject + " requires api"
+}
+
+// rootProgram says what is wrong with a root program, or with the directory
+// they are synthesized in.
+func (e *ConfigError) rootProgram() string {
+	switch e.Problem {
 	case ProblemReservedDirectory:
 		return fmt.Sprintf("%s exists in %s: the directory is reserved for synthesized root programs", rootsDir, e.Value)
 	case ProblemUnreadable:
@@ -85,10 +121,38 @@ func (e *ConfigError) Error() string {
 		return fmt.Sprintf("reading root program %s: %v", e.Value, e.cause)
 	case ProblemNotMain:
 		return fmt.Sprintf("root program %s declares package %s, not main", e.Value, e.Package)
-	case ProblemNoMain:
-		return fmt.Sprintf("root program %s declares no func main", e.Value)
 	default:
-		return fmt.Sprintf("%s: %s", e.Setting, e.Problem)
+		return fmt.Sprintf("root program %s declares no func main", e.Value)
+	}
+}
+
+// selection says what is wrong with the rule selection.
+func (e *ConfigError) selection() string {
+	switch {
+	case e.Problem == ProblemServesNoRule:
+		rules := make([]string, 0, len(e.Setting.Serves()))
+		for _, rule := range e.Setting.Serves() {
+			rules = append(rules, rule.String())
+		}
+		return fmt.Sprintf("%s configures only %s, which the rule selection leaves off",
+			e.Setting, strings.Join(rules, " and "))
+	case e.cause == nil:
+		// The selection names its own key.
+		return "the rule selection means nothing"
+	default:
+		return e.cause.Error()
+	}
+}
+
+// entry says what is wrong with an echo-functions entry.
+func (e *ConfigError) entry() string {
+	switch e.Problem {
+	case ProblemUnexplained:
+		return fmt.Sprintf("%s entry %s carries no reason", e.Setting, e.Value)
+	case ProblemNamesNoFunction:
+		return fmt.Sprintf("%s entry %q names no function of the module", e.Setting, e.Value)
+	default:
+		return fmt.Sprintf("%s entry %s changes no verdict", e.Setting, e.Value)
 	}
 }
 
@@ -116,6 +180,8 @@ const (
 	SettingTestFacing
 	// SettingRoots is roots, [Config.Roots].
 	SettingRoots
+	// SettingEchoFunctions is echo-functions, [Config.EchoFunctions].
+	SettingEchoFunctions
 )
 
 // String is the setting's key.
@@ -135,9 +201,20 @@ func (s Setting) String() string {
 		return "test-facing"
 	case SettingRoots:
 		return "roots"
+	case SettingEchoFunctions:
+		return "echo-functions"
 	default:
 		return "Setting(" + strconv.Itoa(int(s)) + ")"
 	}
+}
+
+// Serves returns the rules beside the verdicts a setting configures, or nil
+// for a setting that configures the verdicts.
+func (s Setting) Serves() []Rule {
+	if s == SettingEchoFunctions {
+		return []Rule{RuleInertField}
+	}
+	return nil
 }
 
 // omitted says what leaving the setting out asks for, for [ProblemEmpty],
@@ -150,6 +227,8 @@ func (s Setting) omitted() (string, bool) {
 		return "declare no test-facing packages", true
 	case SettingRoots:
 		return "declare no root programs", true
+	case SettingEchoFunctions:
+		return "declare no echo functions", true
 	default:
 		return "", false
 	}
@@ -208,6 +287,21 @@ const (
 	ProblemNotMain
 	// ProblemNoMain is a root program declaring no func main.
 	ProblemNoMain
+	// ProblemRuleSelection is a rule selection that means nothing, which
+	// the cause says how, naming the key.
+	ProblemRuleSelection
+	// ProblemServesNoRule is a setting given while every rule it configures
+	// is off, so it configures nothing.
+	ProblemServesNoRule
+	// ProblemUnexplained is an entry carrying no reason.
+	ProblemUnexplained
+	// ProblemNamesNoFunction is an echo-functions entry naming no function
+	// the module declares.
+	ProblemNamesNoFunction
+	// ProblemChangesNothing is an echo-functions entry whose exemption changes
+	// no verdict: nothing it reads would otherwise keep a field from being
+	// reported.
+	ProblemChangesNothing
 )
 
 // String is the problem's token.
@@ -237,6 +331,16 @@ func (p Problem) String() string {
 		return "not-main"
 	case ProblemNoMain:
 		return "no-main"
+	case ProblemRuleSelection:
+		return "rule-selection"
+	case ProblemServesNoRule:
+		return "serves-no-rule"
+	case ProblemUnexplained:
+		return "unexplained"
+	case ProblemNamesNoFunction:
+		return "names-no-function"
+	case ProblemChangesNothing:
+		return "changes-nothing"
 	default:
 		return "Problem(" + strconv.Itoa(int(p)) + ")"
 	}

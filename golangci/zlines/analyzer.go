@@ -10,6 +10,8 @@ import (
 	"unicode/utf8"
 
 	"golang.org/x/tools/go/analysis"
+
+	"github.com/zcayou/go-tools/golangci/internal/ruleset"
 )
 
 // Rule names the check a diagnostic came from.
@@ -63,34 +65,24 @@ that fills it. A paragraph of one line may run past the length by the comment
 overrun before it is reported.`
 
 // NewAnalyzer builds the analyzer that enforces the line-break conventions
-// under settings.
-func NewAnalyzer(settings Settings) *analysis.Analyzer {
-	c := &checker{
-		lineLength: settings.lineLength(),
-		band: band{
-			minimum: settings.commentMinLength(),
-			limit:   settings.commentLength(),
-			overrun: settings.commentOverrun(),
-		},
-		signatureWrap: settings.signatureWrap(),
-		bodyCollapse:  settings.bodyCollapse(),
-		commentWrap:   settings.commentWrap(),
-		commentExempt: settings.commentExempt(),
+// under settings. Settings no rule could mean are a [*ConfigError].
+func NewAnalyzer(settings Settings) (*analysis.Analyzer, error) {
+	c, err := settings.checker()
+	if err != nil {
+		return nil, err
 	}
 
 	return &analysis.Analyzer{
 		Name: Name,
 		Doc:  analyzerDoc,
 		Run:  c.run,
-	}
+	}, nil
 }
 
 type checker struct {
 	lineLength    int
 	band          band
-	signatureWrap bool
-	bodyCollapse  bool
-	commentWrap   bool
+	rules         ruleset.Enabled[Rule]
 	commentExempt []string
 }
 
@@ -119,15 +111,15 @@ func (c *checker) run(pass *analysis.Pass) (any, error) {
 				continue
 			}
 
-			if c.signatureWrap {
+			if c.rules.Has(RuleSignatureWrap) {
 				c.checkSignature(pass, src, file, fn)
 			}
-			if c.bodyCollapse {
+			if c.rules.Has(RuleBodyCollapse) {
 				c.checkBody(pass, src, file, fn, newline)
 			}
 		}
 
-		if c.commentWrap {
+		if c.rules.Has(RuleCommentWrap) {
 			c.checkComments(pass, src, file, syntax, newline)
 		}
 	}

@@ -267,6 +267,16 @@ type Config struct {
 	// as its own main program: its main roots the call graph in both views and its
 	// facts count as evidence, while nothing in it is ever reported.
 	Roots []string
+
+	// Rules are the rules to run beside the verdicts. None runs by default.
+	// [RuleInertField] requires API.
+	Rules []Rule
+
+	// EchoFunctions are functions whose reads of a field echo it into text
+	// or an identity rather than act on it, written import/path.Func,
+	// import/path.Type.Method or import/path.(*Type).Method. It configures
+	// [RuleInertField], which has to run.
+	EchoFunctions []string
 }
 
 // Finding is one reported declaration.
@@ -292,15 +302,35 @@ type Finding struct {
 
 	// Package is the import path that declares it.
 	Package string
+
+	// Rule is the rule beside the verdicts that reported the finding, or zero
+	// for a verdict's. A rule's finding carries no verdict and no kind.
+	Rule Rule
+
+	// Detail is a rule's finding's message after the rule's token.
+	Detail string
 }
 
-// Category is the token the finding is reported under: its verdict, prefixed
-// test-only in the test-only family.
+// Category is the token the finding is reported under: its rule, or its
+// verdict, prefixed test-only in the test-only family.
 func (f Finding) Category() string {
-	if f.TestOnly {
+	switch {
+	case f.Rule != 0:
+		return f.Rule.String()
+	case f.TestOnly:
 		return "test-only " + f.Verdict.String()
+	default:
+		return f.Verdict.String()
 	}
-	return f.Verdict.String()
+}
+
+// Message is the whole diagnostic text, opening with the category: a verdict
+// names the declaration, and a rule says what it found.
+func (f Finding) Message() string {
+	if f.Rule != 0 {
+		return f.Category() + ": " + f.Detail
+	}
+	return f.Category() + ": " + f.Name
 }
 
 // Analyze reports the declarations nothing in the loaded program can reach.
@@ -310,7 +340,8 @@ func (f Finding) Category() string {
 // methods, then unused exported methods — and sorted by position within each
 // group. Under [Config.Tests] the same groups follow once more in their
 // test-only form, holding the production declarations only test evidence keeps
-// alive. Callers that want a single positional order must sort.
+// alive. The findings of the rules beside the verdicts come last. Callers
+// that want a single positional order must sort.
 func Analyze(ctx context.Context, cfg Config) ([]Finding, error) {
 	surface, declared, err := validate(cfg)
 	if err != nil {
@@ -364,7 +395,9 @@ func Analyze(ctx context.Context, cfg Config) ([]Finding, error) {
 		return nil, err
 	}
 
-	full, err := evaluate(ctx, prog, ssaPkgs, pkgs, surface, facts, methodDecls, copies, whole, sealed, credit, cfg.Tests, view{})
+	full, reach, err := evaluate(
+		ctx, prog, ssaPkgs, pkgs, surface, facts, methodDecls, copies, whole, sealed, credit, cfg.Tests, view{},
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -373,7 +406,7 @@ func Analyze(ctx context.Context, cfg Config) ([]Finding, error) {
 		findings = append(findings, newFinding(decl))
 	}
 	if !cfg.Tests {
-		return findings, nil
+		return inertFields(cfg, findings, prog, pkgs, surface, reach)
 	}
 
 	// The masked view answers the same questions with test-origin evidence
@@ -396,11 +429,30 @@ func Analyze(ctx context.Context, cfg Config) ([]Finding, error) {
 	if !surface.rootsInstantiations() {
 		sealed = newSealedSurface(surface, maskedInst, pkgs)
 	}
-	masked, err := evaluate(ctx, prog, ssaPkgs, pkgs, surface, facts, methodDecls, copies, maskedInst, sealed, credit, false, mask)
+	masked, production, err := evaluate(
+		ctx, prog, ssaPkgs, pkgs, surface, facts, methodDecls, copies, maskedInst, sealed, credit, false, mask,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("analyzing test-only liveness: %w", err)
 	}
-	return append(findings, testOnlyFindings(full, masked, declared.packages)...), nil
+	findings = append(findings, testOnlyFindings(full, masked, declared.packages)...)
+	// What the masked view reaches is what production roots reach, which is what
+	// a read has to sit in to be the module acting on a field.
+	return inertFields(cfg, findings, prog, pkgs, surface, production)
+}
+
+// inertFields appends inert-field's findings when the configuration runs it.
+func inertFields(
+	cfg Config, findings []Finding, prog *program, pkgs []*packages.Package, surface *apiSurface, live reachability,
+) ([]Finding, error) {
+	if !slices.Contains(cfg.Rules, RuleInertField) {
+		return findings, nil
+	}
+	inert, err := newInertFields(prog, pkgs, surface, live, cfg.EchoFunctions)
+	if err != nil {
+		return nil, err
+	}
+	return append(findings, inert...), nil
 }
 
 // validate checks what the configuration asks for before anything loads,
@@ -421,6 +473,13 @@ func validate(cfg Config) (*apiSurface, *testFacing, error) {
 	}
 	if cfg.APITestConsumers && !cfg.Tests {
 		return nil, nil, &ConfigError{Setting: SettingAPITestConsumers, Problem: ProblemRequiresTests}
+	}
+	inert := slices.Contains(cfg.Rules, RuleInertField)
+	if inert && len(surface.patterns) == 0 {
+		return nil, nil, &ConfigError{Rule: RuleInertField, Problem: ProblemRequiresAPI}
+	}
+	if cfg.EchoFunctions != nil && !inert {
+		return nil, nil, &ConfigError{Setting: SettingEchoFunctions, Problem: ProblemServesNoRule}
 	}
 	return surface, declared, nil
 }
@@ -468,9 +527,9 @@ func loadProgram(ctx context.Context, cfg Config, dir string, load *packages.Con
 }
 
 // evaluate runs every verdict pass over the built program under one evidence
-// view and returns the surface-filtered findings in report order. inst
-// is the instantiations the view admits, sealed the sealed surface it weighs,
-// and credit the enum names it credits.
+// view and returns the surface-filtered findings in report order, and what
+// the view reaches. inst is the instantiations the view admits, sealed
+// the sealed surface it weighs, and credit the enum names it credits.
 func evaluate(
 	ctx context.Context,
 	prog *program,
@@ -485,7 +544,7 @@ func evaluate(
 	credit *enumNames,
 	tests bool,
 	v view,
-) ([]declaration, error) {
+) ([]declaration, reachability, error) {
 	// The reference scans run first: whether a type is referenced decides both
 	// which API methods stay exempt and which of them are worth rooting.
 	idents := unusedExportedIdents(pkgs, facts, copies, v)
@@ -500,7 +559,7 @@ func evaluate(
 	flows := newInterfaceFlows(prog, inst, methodRefs, v)
 	binds := newInterfaceBindScan(prog, pkgs, sealed, methodRefs, analyzedPackages(pkgs), ev, inst, flows, v)
 	if err := canceled(ctx, StageScanningBinds); err != nil {
-		return nil, err
+		return nil, reachability{}, err
 	}
 
 	// participation is the one answer every method verdict reads: a method covered
@@ -515,7 +574,7 @@ func evaluate(
 		ctx, prog, ssaPkgs, pkgs, surface, sealed, credit, deadTypes, facts, tests, v, participation,
 	)
 	if err != nil {
-		return nil, err
+		return nil, reachability{}, err
 	}
 	interfaceMethods := unusedInterfaceMethods(methodRefs, flows)
 	reflectionMethods := unusedReflectionLiveMethods(methodDecls, reach, methodRefs, participation)
@@ -538,7 +597,7 @@ func evaluate(
 			found = append(found, decl)
 		}
 	}
-	return found, nil
+	return found, reach, nil
 }
 
 // testOnlyFindings diffs the two views by declaration: a production declaration

@@ -29,7 +29,7 @@ func (p *Plugin) analyze(root string) ([]wholemodule.Finding, error) {
 		findings = append(findings, wholemodule.Finding{
 			Pos:      finding.Pos,
 			Category: finding.Category(),
-			Message:  finding.Category() + ": " + finding.Name,
+			Message:  finding.Message(),
 		})
 	}
 	return findings, nil

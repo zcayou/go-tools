@@ -24,6 +24,8 @@
 //   - text-decision: a branch taken on an error's text.
 //   - literal-field: a string or []string field of an error type that only ever
 //     holds constants.
+//   - rendered-field: a string field of an error type that only ever holds
+//     the String of one type its caller could carry instead.
 //   - missing-base: an error type that does not carry the configured base.
 //
 // # Words
@@ -180,6 +182,30 @@
 // new, or a variable declared with no value — also holds its zero value,
 // and that counts as a second one.
 //
+// # rendered-field
+//
+// A field of type string, declared on a module error type, that some module
+// code stores into and whose every store is the String of one type T should
+// carry T instead, when T is a type a caller could hold: an exported, defined,
+// non-interface type of an API package, so the caller can name it; comparable,
+// so carrying it gives the caller ==; and not an enum, whose String
+// is a member's name and literal-field's to judge. A field holding a rendered
+// identifier hands the caller text where the module had a typed value, so
+// the caller renders its own key the same way and compares strings: a text
+// decision by proxy, which breaks the day String changes format.
+//
+// Values are followed as literal-field follows them — through locals, through
+// the parameters and results of unexported module functions, and through loads
+// from fields — and a field written in ways no store shows is not judged.
+// A constant, or a String called through an interface, is no rendering, so
+// a field mixing sources or holding a caller's own string is not judged.
+// A generic body's stores are judged in its instances, where the type whose
+// String is called is known: the rule fires when every store renders the same
+// instantiated type, and the field then carries that instantiation.
+//
+// A deliberate rendering, such as one redacting a credential, is a one-off
+// suppression with its reason.
+//
 // # missing-base
 //
 // While base is set, every module error type has to carry it: a struct base
@@ -224,6 +250,13 @@
 // too when base is not set, since it would scope a rule that is off.
 // A protocols entry carries a reason, which has to be written out: such
 // an entry is a property of the interface rather than a one-off suppression.
+//
+// Every rule is standard, and the default, enable and disable keys choose which
+// run, as every linter of this module chooses. api serves unstructured-return,
+// literal-field and rendered-field; trusted, protocols and sentinels serve
+// unstructured-return; base serves unstructured-return and missing-base;
+// and base-packages serves missing-base. Giving one while every rule it serves
+// is off configures nothing, and fails building the plugin.
 //
 // Settings no module could satisfy fail building the plugin. Whatever needs
 // the module to check fails the run instead: an api pattern matching no API

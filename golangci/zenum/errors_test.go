@@ -11,6 +11,12 @@ import (
 )
 
 var _ = Describe("ConfigError", func() {
+	It("renders a rule selection as the selection says it", func() {
+		_, err := zenum.New(map[string]any{"default": "most"})
+
+		Expect(err).To(MatchError(`zenum: default: "most" is none of standard, all and none`))
+	})
+
 	It("renders a decoding failure as decoding said it, once", func() {
 		// register.DecodeSettings already says what it was doing, and golangci-lint
 		// prefixes the plugin name on top of that.
@@ -34,6 +40,12 @@ var _ = Describe("ConfigError", func() {
 				Problem: zenum.ProblemUnqualifiedType, Setting: engine.SettingOpenEnums, Type: "ID",
 			},
 			`zenum: open-enums[0]: "ID" does not name a type as import/path.Name`),
+		Entry("a rule selection with no cause",
+			&zenum.ConfigError{Problem: zenum.ProblemRuleSelection},
+			"zenum: the rule selection means nothing"),
+		Entry("a setting for rules that are off",
+			&zenum.ConfigError{Problem: zenum.ProblemServesNoRule, Setting: engine.SettingZeroDefaults},
+			"zenum: zero-defaults configures only zero-member, which the rule selection leaves off"),
 		Entry("a decoding failure with no cause",
 			&zenum.ConfigError{Problem: zenum.ProblemUndecodableSettings},
 			"zenum: settings do not decode"),
@@ -49,5 +61,7 @@ var _ = Describe("ConfigError", func() {
 		Entry(nil, zenum.ProblemUndecodableSettings, "undecodable-settings"),
 		Entry(nil, zenum.ProblemUnexplainedException, "unexplained-exception"),
 		Entry(nil, zenum.ProblemUnqualifiedType, "unqualified-type"),
+		Entry(nil, zenum.ProblemRuleSelection, "rule-selection"),
+		Entry(nil, zenum.ProblemServesNoRule, "serves-no-rule"),
 	)
 })

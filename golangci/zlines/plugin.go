@@ -5,6 +5,8 @@ import (
 
 	"github.com/golangci/plugin-module-register/register"
 	"golang.org/x/tools/go/analysis"
+
+	"github.com/zcayou/go-tools/golangci/internal/ruleset"
 )
 
 // Name is what golangci-lint knows this linter by: the key under
@@ -42,6 +44,10 @@ const DefaultCommentOverrun = 10
 // than being silently ignored. The zero value asks for [DefaultLineLength]
 // and for every rule to be enforced.
 type Settings struct {
+	// Selection chooses which rules run, through the default, enable and disable
+	// keys. Every rule is standard.
+	ruleset.Selection
+
 	// LineLength is the widest line the repository allows. A wrapped signature
 	// is reported only when joining it yields a line no wider than this, so
 	// the limit wants to be the one the repository already holds its lines to.
@@ -70,19 +76,6 @@ type Settings struct {
 	// instead. An absent key asks for [DefaultCommentOverrun]; zero holds
 	// the line to the length like any other.
 	CommentOverrun *int `json:"comment-overrun"`
-
-	// SignatureWrap says whether the signature-wrap rule is enforced. An absent
-	// key enforces it, so turning the rule off is something a repository has
-	// to say; the pointer is what tells an absent key from an explicit false.
-	SignatureWrap *bool `json:"signature-wrap"`
-
-	// BodyCollapse says whether the body-collapse rule is enforced, on the same
-	// terms as SignatureWrap.
-	BodyCollapse *bool `json:"body-collapse"`
-
-	// CommentWrap says whether the comment-wrap rule is enforced, on the same
-	// terms as SignatureWrap.
-	CommentWrap *bool `json:"comment-wrap"`
 
 	// CommentExempt are prefixes marking comment lines addressed to a tool rather than a reader —
 	// "+kubebuilder" for the controller-gen markers, say. A line opening with one is left as written,
@@ -146,24 +139,6 @@ func (s Settings) commentOverrun() int {
 	return *s.CommentOverrun
 }
 
-// signatureWrap reports whether the signature-wrap rule is enforced, which
-// an unset setting leaves on.
-func (s Settings) signatureWrap() bool {
-	return s.SignatureWrap == nil || *s.SignatureWrap
-}
-
-// bodyCollapse reports whether the body-collapse rule is enforced, which
-// an unset setting leaves on.
-func (s Settings) bodyCollapse() bool {
-	return s.BodyCollapse == nil || *s.BodyCollapse
-}
-
-// commentWrap reports whether the comment-wrap rule is enforced, which an unset
-// setting leaves on.
-func (s Settings) commentWrap() bool {
-	return s.CommentWrap == nil || *s.CommentWrap
-}
-
 // Plugin adapts the analyzer to golangci-lint's module plugin contract.
 type Plugin struct {
 	settings Settings
@@ -178,8 +153,40 @@ func New(settings any) (register.LinterPlugin, error) {
 	if err != nil {
 		return nil, &ConfigError{Problem: ProblemUndecodable, cause: err}
 	}
+	if _, err := s.checker(); err != nil {
+		return nil, err
+	}
+
+	return &Plugin{settings: s}, nil
+}
+
+// BuildAnalyzers returns the single analyzer this linter runs.
+func (p *Plugin) BuildAnalyzers() ([]*analysis.Analyzer, error) {
+	analyzer, err := NewAnalyzer(p.settings)
+	if err != nil {
+		return nil, err
+	}
+	return []*analysis.Analyzer{analyzer}, nil
+}
+
+// GetLoadMode reports that the rules are syntactic, sparing consumers the cost
+// of type checking for this linter.
+func (p *Plugin) GetLoadMode() string {
+	return register.LoadModeSyntax
+}
+
+// catalog is the rules a selection chooses from.
+var catalog = ruleset.Catalog[Rule]{Rules: []Rule{RuleSignatureWrap, RuleBodyCollapse, RuleCommentWrap}}
+
+// checker resolves the settings into the checker they configure, rejecting
+// values no rule could mean.
+func (s Settings) checker() (*checker, error) {
+	rules, err := catalog.Resolve(s.Selection)
+	if err != nil {
+		return nil, &ConfigError{Problem: ProblemRuleSelection, cause: err}
+	}
 	// A limit of zero or less is a mistake rather than a way to turn a rule off,
-	// which is what the rule's own key is for.
+	// which is what disable is for.
 	for _, length := range []struct {
 		setting Setting
 		value   *int
@@ -208,17 +215,42 @@ func New(settings any) (register.LinterPlugin, error) {
 	if slices.Contains(s.CommentExempt, "") {
 		return nil, &ConfigError{Setting: SettingCommentExempt, Problem: ProblemEmptyPrefix}
 	}
+	// A setting whose every rule is off configures nothing.
+	for _, given := range []struct {
+		setting Setting
+		set     bool
+	}{
+		{SettingLineLength, s.LineLength != nil},
+		{SettingCommentLength, s.CommentLength != nil},
+		{SettingCommentMinLength, s.CommentMinLength != nil},
+		{SettingCommentOverrun, s.CommentOverrun != nil},
+		{SettingCommentExempt, s.CommentExempt != nil},
+	} {
+		if given.set && !rules.Any(given.setting.serves()...) {
+			return nil, &ConfigError{Setting: given.setting, Problem: ProblemServesNoRule}
+		}
+	}
 
-	return &Plugin{settings: s}, nil
+	return &checker{
+		lineLength: s.lineLength(),
+		band: band{
+			minimum: s.commentMinLength(),
+			limit:   s.commentLength(),
+			overrun: s.commentOverrun(),
+		},
+		rules:         rules,
+		commentExempt: s.commentExempt(),
+	}, nil
 }
 
-// BuildAnalyzers returns the single analyzer this linter runs.
-func (p *Plugin) BuildAnalyzers() ([]*analysis.Analyzer, error) {
-	return []*analysis.Analyzer{NewAnalyzer(p.settings)}, nil
-}
-
-// GetLoadMode reports that the rules are syntactic, sparing consumers the cost
-// of type checking for this linter.
-func (p *Plugin) GetLoadMode() string {
-	return register.LoadModeSyntax
+// serves returns the rules a setting configures.
+func (s Setting) serves() []Rule {
+	switch s {
+	case SettingLineLength:
+		return []Rule{RuleSignatureWrap}
+	case SettingCommentLength, SettingCommentMinLength, SettingCommentOverrun, SettingCommentExempt:
+		return []Rule{RuleCommentWrap}
+	default:
+		return nil
+	}
 }

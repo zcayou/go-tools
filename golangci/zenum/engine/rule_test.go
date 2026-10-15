@@ -21,5 +21,8 @@ var _ = Describe("Rule", func() {
 		Entry(nil, engine.RuleTokenDecision, "token-decision"),
 		Entry(nil, engine.RuleForgedConversion, "forged-conversion"),
 		Entry(nil, engine.RuleNumericVerb, "numeric-verb"),
+		Entry(nil, engine.RuleStringBypass, "string-bypass"),
+		Entry(nil, engine.RuleLaunderedConversion, "laundered-conversion"),
+		Entry(nil, engine.RuleOrderedComparison, "ordered-comparison"),
 	)
 })

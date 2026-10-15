@@ -6,6 +6,7 @@ import (
 	"go/types"
 
 	"golang.org/x/tools/go/packages"
+	"golang.org/x/tools/go/types/typeutil"
 )
 
 // syntax runs the rules read from source rather than from SSA. Each turns
@@ -16,7 +17,10 @@ func (a *analysis) syntax() {
 	for _, pkg := range a.module.Packages {
 		for _, file := range pkg.Syntax {
 			for _, decl := range file.Decls {
-				r := &reading{a: a, pkg: pkg, own: a.owner(pkg.TypesInfo, decl), skip: map[ast.Expr]bool{}}
+				r := &reading{
+					a: a, pkg: pkg, own: a.owner(pkg.TypesInfo, decl),
+					skip: map[ast.Expr]bool{}, stored: map[ast.Expr]bool{},
+				}
 				ast.Inspect(decl, r.visit)
 			}
 		}
@@ -34,6 +38,10 @@ type reading struct {
 	// skip holds the constants a comparison, a case or an index lookup is written
 	// with, which token-decision judges or which make no value.
 	skip map[ast.Expr]bool
+
+	// stored holds the operands handed directly to a sync/atomic integer's
+	// write, which keeps a conversion's ordinal without reading it.
+	stored map[ast.Expr]bool
 }
 
 func (r *reading) visit(node ast.Node) bool {
@@ -41,6 +49,7 @@ func (r *reading) visit(node ast.Node) bool {
 	switch node := node.(type) {
 	case *ast.BinaryExpr:
 		r.a.binary(info, node)
+		r.a.ordering(r.pkg, node)
 		if comparison(node.Op) {
 			r.skip[node.X], r.skip[node.Y] = true, true
 		}
@@ -56,14 +65,7 @@ func (r *reading) visit(node ast.Node) bool {
 	case *ast.IndexExpr:
 		r.skip[node.Index] = true
 	case *ast.CallExpr:
-		if tv, ok := info.Types[node.Fun]; ok && tv.IsType() {
-			r.a.conversion(r.pkg, node, tv.Type)
-			if _, generic := types.Unalias(tv.Type).(*types.TypeParam); generic {
-				r.a.generic[node.Lparen] = genericConversion{call: node, pkg: r.pkg}
-			}
-		} else {
-			r.a.formatting(info, node, r.own)
-		}
+		r.call(node)
 	}
 	if expr, ok := node.(ast.Expr); ok && info.Types[expr].Value != nil {
 		if !r.skip[expr] {
@@ -73,6 +75,29 @@ func (r *reading) visit(node ast.Node) bool {
 		return false
 	}
 	return true
+}
+
+// call judges a call: a conversion, or a call of a function that may format
+// its operands, order them, or store them atomically.
+func (r *reading) call(call *ast.CallExpr) {
+	info := r.pkg.TypesInfo
+	if tv, ok := info.Types[call.Fun]; ok && tv.IsType() {
+		r.a.conversion(r.pkg, call, tv.Type)
+		if !r.stored[call] {
+			r.a.laundered(r.pkg, call, tv.Type)
+		}
+		if typeParam(tv.Type) || len(call.Args) == 1 && typeParam(info.TypeOf(call.Args[0])) {
+			r.a.generic[call.Lparen] = genericConversion{call: call, pkg: r.pkg, stored: r.stored[call]}
+		}
+		return
+	}
+	r.a.formatting(info, call, r.own)
+	r.a.extreme(r.pkg, call)
+	if callee, ok := typeutil.Callee(info, call).(*types.Func); ok && atomicWrite(callee) {
+		for _, arg := range call.Args {
+			r.stored[ast.Unparen(arg)] = true
+		}
+	}
 }
 
 // owner returns the enum decl is a method of, or nil.
@@ -109,4 +134,10 @@ func comparison(op token.Token) bool {
 	default:
 		return false
 	}
+}
+
+// typeParam reports whether t is a type parameter.
+func typeParam(t types.Type) bool {
+	_, ok := types.Unalias(t).(*types.TypeParam)
+	return ok
 }

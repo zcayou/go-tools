@@ -36,7 +36,9 @@
 // and calls are taken from both: unstructured-return judges no value of a type
 // parameter, and literal-field holds a value depending on one not
 // constant-derived, so a body nothing instantiates still counts, and its
-// instances add nothing it does not.
+// instances add nothing it does not. rendered-field leaves a generic body's
+// stores and calls to its instances, where the type a String is called
+// on is known.
 //
 // # Tracing an error
 //
@@ -126,14 +128,19 @@
 //
 // # Constant-derivation
 //
-// literal-field decides each field, parameter and result as a greatest fixed
-// point. Each is built once into the nodes its values depend on, or marked
-// as fed something that is not constant-derived whatever the nodes hold. Every
-// node starts out constant-derived; the marked ones lose it, and so, through
-// the graph of dependents, does every node depending on one that lost it.
-// What is left once nothing more is lost only ever holds constants. Which
-// ones is read afterwards over the same graph, only to tell a field holding
-// one value, which carries no information, from one holding several.
+// literal-field and rendered-field share one dataflow, and differ in what they
+// count as a value's origin: a constant or an API enum's member name
+// for the one, the String of a type a caller could carry for the other. Both
+// decide each field, parameter and result as a greatest fixed point. Each
+// is built once into the nodes its values depend on, or marked as fed something
+// that is not constant-derived whatever the nodes hold. Every node starts out
+// constant-derived; the marked ones lose it, and so, through the graph
+// of dependents, does every node depending on one that lost it. What is left
+// once nothing more is lost only ever holds values from an origin.
+// For literal-field, which constants is read afterwards over the same graph,
+// only to tell a field holding one value, which carries no information, from
+// one holding several. For rendered-field, the types rendered are gathered over
+// the graph, and a field rendering exactly one is reported.
 //
 // A field can be written in ways no store into it shows, and is then not
 // constant-derived: when its address is put to a use other than a load

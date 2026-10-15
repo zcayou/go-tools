@@ -7,6 +7,7 @@ import (
 	"github.com/golangci/plugin-module-register/register"
 	"golang.org/x/tools/go/analysis"
 
+	"github.com/zcayou/go-tools/golangci/internal/ruleset"
 	"github.com/zcayou/go-tools/golangci/internal/wholemodule"
 	"github.com/zcayou/go-tools/golangci/zenum/engine"
 )
@@ -23,6 +24,10 @@ const Name = "zenum"
 // rather than a one-off suppression; a one-off goes through a nolint directive
 // or a linters.exclusions rule. An entry that suppresses nothing fails the run.
 type Settings struct {
+	// Selection chooses which rules run, through the default, enable and disable
+	// keys. Every rule is standard.
+	ruleset.Selection
+
 	// OpenEnums are types whose values come from outside the module, such
 	// as a wire ID declaring a few well-known constants. They are no enum to any
 	// rule.
@@ -34,6 +39,10 @@ type Settings struct {
 	// RelatedEnums are pairs whose tokens overlap because they classify different
 	// things.
 	RelatedEnums []Relation `json:"related-enums"`
+
+	// OrderedEnums are enums whose ordinals are an order, such as a severity
+	// whose numbers rise with it.
+	OrderedEnums []Exception `json:"ordered-enums"`
 
 	// BuildTags are extra build tags. golangci-lint's run.build-tags cannot
 	// be read from a plugin, so it has to be repeated here.
@@ -101,7 +110,25 @@ func (p *Plugin) GetLoadMode() string {
 // configFrom validates every entry: a reason that says why, and a type named
 // the way the engine looks one up.
 func configFrom(s Settings) (engine.Config, error) {
-	var config engine.Config
+	rules, err := catalog.Resolve(s.Selection)
+	if err != nil {
+		return engine.Config{}, &ConfigError{Problem: ProblemRuleSelection, cause: err}
+	}
+	// A setting whose every rule is off configures nothing.
+	for _, given := range []struct {
+		setting engine.Setting
+		set     bool
+	}{
+		{engine.SettingZeroDefaults, s.ZeroDefaults != nil},
+		{engine.SettingRelatedEnums, s.RelatedEnums != nil},
+		{engine.SettingOrderedEnums, s.OrderedEnums != nil},
+	} {
+		if given.set && !rules.Any(serves(given.setting)...) {
+			return engine.Config{}, &ConfigError{Problem: ProblemServesNoRule, Setting: given.setting}
+		}
+	}
+
+	config := engine.Config{Disabled: rules.Disabled(catalog)}
 	for i, entry := range s.OpenEnums {
 		if err := validate(engine.SettingOpenEnums, i, entry.Reason, entry.Type); err != nil {
 			return engine.Config{}, err
@@ -120,6 +147,12 @@ func configFrom(s Settings) (engine.Config, error) {
 		}
 		config.RelatedEnums = append(config.RelatedEnums,
 			engine.Pair{First: entry.First, Second: entry.Second})
+	}
+	for i, entry := range s.OrderedEnums {
+		if err := validate(engine.SettingOrderedEnums, i, entry.Reason, entry.Type); err != nil {
+			return engine.Config{}, err
+		}
+		config.OrderedEnums = append(config.OrderedEnums, entry.Type)
 	}
 	return config, nil
 }
@@ -143,4 +176,35 @@ func validate(setting engine.Setting, index int, reason string, types ...string)
 func qualified(text string) bool {
 	path, name, ok := strings.CutLast(text, ".")
 	return ok && path != "" && token.IsIdentifier(name)
+}
+
+// catalog is the rules a selection chooses from.
+var catalog = ruleset.Catalog[engine.Rule]{Rules: []engine.Rule{
+	engine.RuleStringEnum,
+	engine.RuleUnnamed,
+	engine.RuleUnreadableName,
+	engine.RuleAmbiguousName,
+	engine.RuleZeroMember,
+	engine.RuleRestated,
+	engine.RuleTokenDecision,
+	engine.RuleForgedConversion,
+	engine.RuleNumericVerb,
+	engine.RuleStringBypass,
+	engine.RuleLaunderedConversion,
+	engine.RuleOrderedComparison,
+}}
+
+// serves returns the rules a setting configures. open-enums takes a type out
+// of every rule, so it configures whichever run.
+func serves(setting engine.Setting) []engine.Rule {
+	switch setting {
+	case engine.SettingZeroDefaults:
+		return []engine.Rule{engine.RuleZeroMember}
+	case engine.SettingRelatedEnums:
+		return []engine.Rule{engine.RuleRestated}
+	case engine.SettingOrderedEnums:
+		return []engine.Rule{engine.RuleOrderedComparison}
+	default:
+		return catalog.Rules
+	}
 }

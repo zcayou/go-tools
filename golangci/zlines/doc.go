@@ -167,8 +167,12 @@
 // edges; a minimum equal to the length asks for the exact fill back.
 // A paragraph of one line may run comment-overrun columns past the length,
 // which defaults to [DefaultCommentOverrun]; zero holds it to the length like
-// any other. Every rule is enforced unless a repository says otherwise,
-// and each has a key of its own to say it with:
+// any other.
+//
+// Every rule is standard, and the default, enable and disable keys choose which
+// run, as every linter of this module chooses. line-length serves
+// signature-wrap, and the comment keys serve comment-wrap; giving one while
+// the rules it serves are off configures nothing, and fails [New]:
 //
 //	settings:
 //	  custom:
@@ -179,10 +183,8 @@
 //	        comment-length: 80
 //	        comment-min-length: 70
 //	        comment-overrun: 10
-//	        signature-wrap: false
-//	        body-collapse: false
-//	        comment-wrap: false
 //	        comment-exempt: ['+kubebuilder']
+//	        disable: [body-collapse]
 //
 // The line length wants to be the one the repository already holds its lines
 // to, since a signature joined past it only trades one complaint for another.

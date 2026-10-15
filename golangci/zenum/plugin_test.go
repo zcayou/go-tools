@@ -1,10 +1,13 @@
 package zenum_test
 
 import (
+	"errors"
+
 	"github.com/golangci/plugin-module-register/register"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/zcayou/go-tools/golangci/internal/ruleset"
 	"github.com/zcayou/go-tools/golangci/zenum"
 	"github.com/zcayou/go-tools/golangci/zenum/engine"
 )
@@ -17,7 +20,7 @@ var _ = Describe("Plugin", func() {
 		Entry("absent", nil, engine.Config{}),
 		Entry("empty", map[string]any{}, engine.Config{}),
 		Entry("empty lists", map[string]any{
-			"open-enums": []any{}, "zero-defaults": []any{}, "related-enums": []any{},
+			"open-enums": []any{}, "zero-defaults": []any{}, "related-enums": []any{}, "ordered-enums": []any{},
 		}, engine.Config{}),
 		Entry("open enums", map[string]any{
 			"open-enums": []any{map[string]any{"type": "example.com/wire.ID", "reason": "IDs come from the wire"}},
@@ -30,6 +33,42 @@ var _ = Describe("Plugin", func() {
 				"first": "example.com/a.Status", "second": "example.com/b.State", "reason": "different things",
 			}},
 		}, engine.Config{RelatedEnums: []engine.Pair{{First: "example.com/a.Status", Second: "example.com/b.State"}}}),
+		Entry("ordered enums", map[string]any{
+			"ordered-enums": []any{map[string]any{"type": "example.com/log.Level", "reason": "severity rises"}},
+		}, engine.Config{OrderedEnums: []string{"example.com/log.Level"}}),
+		Entry("a rule disabled", map[string]any{"disable": []string{"restated", "numeric-verb"}},
+			engine.Config{Disabled: []engine.Rule{engine.RuleRestated, engine.RuleNumericVerb}}),
+	)
+
+	It("rejects a rule selection that means nothing, naming the key", func() {
+		_, err := zenum.New(map[string]any{"enable": []string{"forged"}})
+
+		Expect(err).To(BeAssignableToTypeOf(&zenum.ConfigError{}))
+		Expect(err).To(HaveField("Problem", zenum.ProblemRuleSelection))
+		Expect(errors.Unwrap(err)).To(MatchError(
+			&ruleset.Error{Key: ruleset.KeyEnable, Problem: ruleset.ProblemUnknownRule, Value: "forged"}))
+	})
+
+	DescribeTable("rejects a setting whose every rule the selection leaves off",
+		func(settings map[string]any, setting engine.Setting) {
+			_, err := zenum.New(settings)
+
+			Expect(err).To(MatchError(&zenum.ConfigError{Problem: zenum.ProblemServesNoRule, Setting: setting}))
+		},
+		Entry("zero-defaults without zero-member", map[string]any{
+			"disable":       []string{"zero-member"},
+			"zero-defaults": []any{map[string]any{"type": "example.com/a.A", "reason": "documented"}},
+		}, engine.SettingZeroDefaults),
+		Entry("related-enums without restated", map[string]any{
+			"disable": []string{"restated"},
+			"related-enums": []any{map[string]any{
+				"first": "example.com/a.A", "second": "example.com/b.B", "reason": "different things",
+			}},
+		}, engine.SettingRelatedEnums),
+		Entry("ordered-enums without ordered-comparison", map[string]any{
+			"disable":       []string{"ordered-comparison"},
+			"ordered-enums": []any{map[string]any{"type": "example.com/log.Level", "reason": "severity rises"}},
+		}, engine.SettingOrderedEnums),
 	)
 
 	It("loads the module under the configured build tags", func() {
@@ -69,6 +108,11 @@ var _ = Describe("Plugin", func() {
 				map[string]any{"first": "example.com/a.Status", "reason": "different things"},
 			}},
 			&zenum.ConfigError{Problem: zenum.ProblemUnqualifiedType, Setting: engine.SettingRelatedEnums}),
+		Entry("an ordered enum with no reason",
+			map[string]any{"ordered-enums": []any{map[string]any{"type": "example.com/log.Level"}}},
+			&zenum.ConfigError{
+				Problem: zenum.ProblemUnexplainedException, Setting: engine.SettingOrderedEnums,
+			}),
 	)
 
 	DescribeTable("rejects a block that does not decode",

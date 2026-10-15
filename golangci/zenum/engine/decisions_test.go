@@ -8,7 +8,7 @@ import (
 )
 
 var _ = Describe("token decisions", func() {
-	It("reports each decision on a rendered token, and each comparison with a constant no member holds", func() {
+	It("reports each decision on a rendered token, and each comparison with a constant naming no member", func() {
 		Expect(analyzeFixture("decisions", engine.Config{})).To(Equal([]string{
 			// v.String(), directly, through a strings matcher, through a transformation,
 			// through an embedding struct, and switched on. Comparing with ""
@@ -30,6 +30,11 @@ var _ = Describe("token decisions", func() {
 			// Zero spelled as a number where zero is a member.
 			"decisions.go:48:7: token-decision: example.com/decisions/kinds.Level",
 			"decisions.go:52:7: token-decision: example.com/decisions/kinds.Mode",
+			// A member's value spelled as anything but the member, outside the declaring
+			// package.
+			"decisions.go:58:7: token-decision: example.com/decisions/kinds.Kind",
+			"decisions.go:61:7: token-decision: example.com/decisions/kinds.Kind",
+			"decisions.go:63:7: token-decision: example.com/decisions/kinds.Mode",
 			"kinds/kinds.go:24:6: string-enum: example.com/decisions/kinds.Mode",
 			"kinds/kinds.go:31:2: zero-member: example.com/decisions/kinds.Level",
 		}))
@@ -46,5 +51,7 @@ var _ = Describe("token decisions", func() {
 			"token-decision: compares kinds.Level with zero, which is its member LevelNone; compare with the member by name"))
 		Expect(found).To(HaveKeyWithValue("decisions.go:52:7",
 			`token-decision: compares kinds.Mode with "nope", which no member holds`))
+		Expect(found).To(HaveKeyWithValue("decisions.go:58:7",
+			"token-decision: compares kinds.Kind with 2, which is KindB's value; compare with KindB"))
 	})
 })

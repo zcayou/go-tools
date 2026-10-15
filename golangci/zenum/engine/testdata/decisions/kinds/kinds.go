@@ -47,3 +47,9 @@ func (l Level) String() string {
 type Labeled struct {
 	Kind
 }
+
+// second spells a member's value, which the declaring package may: it owns
+// the numbering.
+func second(k Kind) bool { return k == 2 }
+
+var _ = second

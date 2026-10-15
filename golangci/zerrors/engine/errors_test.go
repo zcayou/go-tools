@@ -6,6 +6,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/zcayou/go-tools/golangci/internal/ruleset"
 	"github.com/zcayou/go-tools/golangci/zerrors/engine"
 )
 
@@ -73,12 +74,29 @@ var _ = Describe("ConfigError", func() {
 		Entry("exempting nothing outside protocols",
 			&engine.ConfigError{Setting: engine.SettingTrusted, Problem: engine.ProblemExemptsNothing, Value: "x"},
 			`trusted: "x" exempts nothing`),
+		Entry("a rule selection, with nothing said",
+			&engine.ConfigError{Problem: engine.ProblemRuleSelection},
+			"the rule selection means nothing"),
+		Entry("a setting for rules that are off",
+			&engine.ConfigError{Setting: engine.SettingBase, Problem: engine.ProblemServesNoRule},
+			"base configures only unstructured-return and missing-base, which the rule selection leaves off"),
+		Entry("a setting for three rules that are off",
+			&engine.ConfigError{Setting: engine.SettingAPI, Problem: engine.ProblemServesNoRule},
+			"api configures only unstructured-return, literal-field and rendered-field, "+
+				"which the rule selection leaves off"),
 		Entry("no setting and no problem",
 			&engine.ConfigError{}, `Setting(0): "": Problem(0)`),
 		Entry("a problem past the known ones",
 			&engine.ConfigError{Setting: engine.SettingBase, Problem: engine.Problem(99), Value: "a.B"},
 			`base: "a.B": Problem(99)`),
 	)
+
+	It("renders a rule selection as the selection says it", func() {
+		err := engine.RuleSelection(&ruleset.Error{Key: ruleset.KeyDisable, Problem: ruleset.ProblemEmptyList})
+
+		Expect(err).To(MatchError("disable: an empty list names no rule; leave the key out"))
+		Expect(err).To(HaveField("Problem", engine.ProblemRuleSelection))
+	})
 
 	It("renders a base-packages pattern through what resolving it ran into", func() {
 		_, err := run("base", engine.Config{

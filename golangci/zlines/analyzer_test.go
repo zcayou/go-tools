@@ -6,6 +6,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/analysistest"
 
 	"github.com/zcayou/go-tools/golangci/zlines"
@@ -14,7 +15,7 @@ import (
 // A fixture for one rule carries prose written for the reader rather than
 // filled to the limit, so every suite but the comment-wrap one turns that rule
 // off and keeps each fixture about the rule it is named for.
-var quiet = zlines.Settings{CommentWrap: new(false)}
+var quiet = zlines.Settings{Disable: []string{zlines.RuleCommentWrap.String()}}
 
 // bandedComment breaks inside the band a comment length of 30 derives: its
 // first line stops at 24 columns, in the 20-to-30 band, though the next word
@@ -27,17 +28,17 @@ const bandedComment = "package p\n" +
 
 var _ = Describe("Analyzer", func() {
 	It("is named for the linter", func() {
-		Expect(zlines.NewAnalyzer(zlines.Settings{}).Name).To(Equal(zlines.Name))
+		Expect(newAnalyzer(zlines.Settings{}).Name).To(Equal(zlines.Name))
 	})
 
 	It("reports every wrapped signature that fits, and joins it", func() {
 		analysistest.RunWithSuggestedFixes(GinkgoT(), analysistest.TestData(),
-			zlines.NewAnalyzer(quiet), "wrapped")
+			newAnalyzer(quiet), "wrapped")
 	})
 
 	It("renders the joined signature the way gofmt would", func() {
 		results := analysistest.Run(GinkgoT(), analysistest.TestData(),
-			zlines.NewAnalyzer(quiet), "wrapped")
+			newAnalyzer(quiet), "wrapped")
 
 		Expect(fixText(results, zlines.RuleSignatureWrap, "params")).To(
 			Equal("func params(count int, name string) error"))
@@ -47,7 +48,7 @@ var _ = Describe("Analyzer", func() {
 
 	It("leaves a wrap alone when joining would lose something or not last", func() {
 		analysistest.Run(GinkgoT(), analysistest.TestData(),
-			zlines.NewAnalyzer(quiet), "justified")
+			newAnalyzer(quiet), "justified")
 	})
 
 	It("holds signatures to the configured limit, which they may reach exactly", func() {
@@ -55,17 +56,17 @@ var _ = Describe("Analyzer", func() {
 		settings.LineLength = new(34)
 
 		analysistest.Run(GinkgoT(), analysistest.TestData(),
-			zlines.NewAnalyzer(settings), "narrow")
+			newAnalyzer(settings), "narrow")
 	})
 
 	It("reports a body written on the signature line, and puts it on its own", func() {
 		analysistest.RunWithSuggestedFixes(GinkgoT(), analysistest.TestData(),
-			zlines.NewAnalyzer(quiet), "collapsed")
+			newAnalyzer(quiet), "collapsed")
 	})
 
 	It("renders the expanded body the way gofmt would, indentation and all", func() {
 		results := analysistest.Run(GinkgoT(), analysistest.TestData(),
-			zlines.NewAnalyzer(quiet), "collapsed")
+			newAnalyzer(quiet), "collapsed")
 
 		Expect(fixText(results, zlines.RuleBodyCollapse, "Demand")).To(Equal("{\n\treturn r.demand\n}"))
 		Expect(fixText(results, zlines.RuleBodyCollapse, "several")).To(Equal("{\n\tfirst()\n\tsecond()\n}"))
@@ -73,12 +74,12 @@ var _ = Describe("Analyzer", func() {
 
 	It("fills every comment paragraph, and never across a blank //-line", func() {
 		analysistest.RunWithSuggestedFixes(GinkgoT(), analysistest.TestData(),
-			zlines.NewAnalyzer(zlines.Settings{}), "comments")
+			newAnalyzer(zlines.Settings{}), "comments")
 	})
 
 	It("carries the indent onto every line it fills, and says what it did", func() {
 		results := analysistest.Run(GinkgoT(), analysistest.TestData(),
-			zlines.NewAnalyzer(zlines.Settings{}), "comments")
+			newAnalyzer(zlines.Settings{}), "comments")
 
 		Expect(messages(results)).To(ContainElement(zlines.RuleCommentWrap.String() +
 			": comment wraps over 3 lines; filled to 80 columns it takes 1"))
@@ -90,28 +91,28 @@ var _ = Describe("Analyzer", func() {
 
 	It("tolerates breaks inside the band, and polices its edges", func() {
 		analysistest.RunWithSuggestedFixes(GinkgoT(), analysistest.TestData(),
-			zlines.NewAnalyzer(zlines.Settings{}), "banded")
+			newAnalyzer(zlines.Settings{}), "banded")
 	})
 
 	It("gives a paragraph of one line the overrun, and a longer one nothing", func() {
 		analysistest.RunWithSuggestedFixes(GinkgoT(), analysistest.TestData(),
-			zlines.NewAnalyzer(zlines.Settings{}), "overrun")
+			newAnalyzer(zlines.Settings{}), "overrun")
 	})
 
 	It("holds a paragraph of one line to the limit when the overrun is zero", func() {
-		Expect(analyze(zlines.NewAnalyzer(zlines.Settings{}), loneComment).messages()).To(BeEmpty())
-		Expect(analyze(zlines.NewAnalyzer(zlines.Settings{CommentOverrun: new(0)}), loneComment).messages()).
+		Expect(analyze(newAnalyzer(zlines.Settings{}), loneComment).messages()).To(BeEmpty())
+		Expect(analyze(newAnalyzer(zlines.Settings{CommentOverrun: new(0)}), loneComment).messages()).
 			To(ConsistOf(zlines.RuleCommentWrap.String() +
 				": comment wraps over 1 lines; filled to 80 columns it takes 2"))
 	})
 
 	It("derives the minimum from the comment length, ten columns under it", func() {
-		Expect(analyze(zlines.NewAnalyzer(zlines.Settings{CommentLength: new(30)}), bandedComment).messages()).
+		Expect(analyze(newAnalyzer(zlines.Settings{CommentLength: new(30)}), bandedComment).messages()).
 			To(BeEmpty())
 	})
 
 	It("restores the exact fill when the minimum meets the length", func() {
-		analyzer := zlines.NewAnalyzer(zlines.Settings{CommentLength: new(30), CommentMinLength: new(30)})
+		analyzer := newAnalyzer(zlines.Settings{CommentLength: new(30), CommentMinLength: new(30)})
 
 		Expect(analyze(analyzer, bandedComment).messages()).To(ConsistOf(zlines.RuleCommentWrap.String() +
 			": comment is wrapped short of the 30-column minimum"))
@@ -123,14 +124,14 @@ var _ = Describe("Analyzer", func() {
 			"// one line of prose wider than the limit it is held to\n" +
 			"type split struct{}\n"
 
-		Expect(analyze(zlines.NewAnalyzer(zlines.Settings{CommentLength: new(30)}), src).messages()).To(
+		Expect(analyze(newAnalyzer(zlines.Settings{CommentLength: new(30)}), src).messages()).To(
 			ConsistOf(zlines.RuleCommentWrap.String() +
 				": comment wraps over 1 lines; filled to 30 columns it takes 3"))
 	})
 
 	It("fills a list item inside the marker it was written with", func() {
 		results := analysistest.Run(GinkgoT(), analysistest.TestData(),
-			zlines.NewAnalyzer(zlines.Settings{}), "comments")
+			newAnalyzer(zlines.Settings{}), "comments")
 
 		Expect(edits(results)).To(ContainElement(
 			"//   - an item whose text is wrapped well short of the limit"))
@@ -138,12 +139,12 @@ var _ = Describe("Analyzer", func() {
 
 	It("reads a list where gofmt reads one, and a marker at the margin as prose", func() {
 		analysistest.RunWithSuggestedFixes(GinkgoT(), analysistest.TestData(),
-			zlines.NewAnalyzer(zlines.Settings{}), "lists")
+			newAnalyzer(zlines.Settings{}), "lists")
 	})
 
 	It("does not leave a line ending on a word that belongs with the next", func() {
 		results := analysistest.Run(GinkgoT(), analysistest.TestData(),
-			zlines.NewAnalyzer(zlines.Settings{}), "comments")
+			newAnalyzer(zlines.Settings{}), "comments")
 
 		// Greedy alone fits "the" onto the first line at 77 columns and strands
 		// it there, so this pins the shorter line rather than the fuller one.
@@ -153,26 +154,24 @@ var _ = Describe("Analyzer", func() {
 	})
 
 	It("leaves a comment addressed to a tool exactly as it was written", func() {
-		analysistest.Run(GinkgoT(), analysistest.TestData(), zlines.NewAnalyzer(zlines.Settings{
+		analysistest.Run(GinkgoT(), analysistest.TestData(), newAnalyzer(zlines.Settings{
 			CommentExempt: []string{"+kubebuilder"},
 		}), "exemptmarkers")
 	})
 
 	It("leaves a build constraint and a generated-file marker out of the prose below", func() {
 		analysistest.Run(GinkgoT(), analysistest.TestData(),
-			zlines.NewAnalyzer(zlines.Settings{}), "directives")
+			newAnalyzer(zlines.Settings{}), "directives")
 	})
 
 	It("finds a line by scanning the source, whatever a //line directive numbers it", func() {
 		analysistest.Run(GinkgoT(), analysistest.TestData(),
-			zlines.NewAnalyzer(zlines.Settings{}), "linedirective")
+			newAnalyzer(zlines.Settings{}), "linedirective")
 	})
 
-	It("leaves every rule alone when it is turned off", func() {
-		analysistest.Run(GinkgoT(), analysistest.TestData(), zlines.NewAnalyzer(zlines.Settings{
-			SignatureWrap: new(false),
-			BodyCollapse:  new(false),
-			CommentWrap:   new(false),
+	It("leaves every rule alone that the selection disables", func() {
+		analysistest.Run(GinkgoT(), analysistest.TestData(), newAnalyzer(zlines.Settings{
+			Disable: []string{zlines.RuleSignatureWrap.String(), zlines.RuleBodyCollapse.String()},
 		}), "unchecked")
 	})
 
@@ -187,7 +186,7 @@ var _ = Describe("Analyzer", func() {
 			"// and which therefore joins the lines around it\n" +
 			"type unindented struct{}\n"
 
-		fixed := analyze(zlines.NewAnalyzer(zlines.Settings{}), src).fixed()
+		fixed := analyze(newAnalyzer(zlines.Settings{}), src).fixed()
 
 		Expect(fixed).NotTo(Equal(src))
 		Expect(fixed).To(Equal(gofmt(fixed)))
@@ -208,7 +207,7 @@ var _ = Describe("Analyzer", func() {
 
 		// The minimum is pinned to the length because the comment's first line sits
 		// inside the derived band, and this spec is about line terminators.
-		fixed := analyze(zlines.NewAnalyzer(zlines.Settings{
+		fixed := analyze(newAnalyzer(zlines.Settings{
 			CommentLength:    new(20),
 			CommentMinLength: new(20),
 		}), src).fixed()
@@ -290,4 +289,13 @@ func edits(results []*analysistest.Result) []string {
 	}
 
 	return out
+}
+
+// newAnalyzer builds the analyzer under settings the spec expects it to take.
+func newAnalyzer(settings zlines.Settings) *analysis.Analyzer {
+	GinkgoHelper()
+
+	analyzer, err := zlines.NewAnalyzer(settings)
+	Expect(err).NotTo(HaveOccurred())
+	return analyzer
 }
