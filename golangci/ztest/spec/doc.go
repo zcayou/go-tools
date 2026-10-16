@@ -148,9 +148,13 @@
 // since its file sits in the build cache.
 //
 // Only assertions are judged. A spec comparing a rendering by hand makes a text
-// decision, and decisions in test files are no rule's. zenum's open-enums
-// is zenum's own: ztest reads no other linter's settings, so a spec asserting
-// an open type's wire token goes through a nolint directive or an exclusion.
+// decision, and decisions in test files are no rule's.
+//
+// An open enum, whose values come from outside the module, needs no exemption.
+// A spec showing that a value no member holds survives asserts the value
+// converted to the enum, Equal(client.Status("archived")), which is no
+// rendering: it asserts the field rather than its text, and the compiler checks
+// the type.
 //
 // # Pinning a rendering
 //

@@ -10,6 +10,8 @@ import (
 	"golang.org/x/tools/go/packages"
 	"golang.org/x/tools/go/ssa"
 	"golang.org/x/tools/go/types/typeutil"
+
+	"github.com/zcayou/go-tools/golangci/internal/wholemodule"
 )
 
 // subjectField is an exported field of a struct the module takes from its
@@ -21,8 +23,9 @@ type subjectField struct {
 	// which a promoted field shares with the struct embedding it.
 	owner string
 
-	// root is the API function or method whose callers set the field.
-	root string
+	// setter says how callers set the field: by calling an API function or method,
+	// or through an API variable.
+	setter string
 }
 
 // polarity is the direction a value crosses the API: authored by the caller
@@ -71,11 +74,16 @@ func newInertFields(
 		in.echoes[name] = map[string]bool{}
 	}
 	for _, root := range apiRoots(pkgs, surface) {
-		in.signature(root.sig, authored, handed, root.name)
+		for _, t := range root.takes {
+			in.walk(t, authored, root.setter)
+		}
+		for _, t := range root.gives {
+			in.walk(t, handed, root.setter)
+		}
 	}
 
 	declared := in.reads(pkgs)
-	in.conversions(prog)
+	in.outflows(prog)
 
 	deprecated := deprecatedFields(in.fset, pkgs)
 	var findings []Finding
@@ -92,8 +100,7 @@ func newInertFields(
 			Rule:    RuleInertField,
 			Name:    name,
 			Package: subject.field.Pkg().Path(),
-			Detail: name + " is set by callers of " + subject.root +
-				" and read by nothing; act on it or remove it",
+			Detail:  name + " is set " + subject.setter + " and read by nothing; act on it or remove it",
 		})
 	}
 
@@ -112,16 +119,37 @@ func newInertFields(
 	return findings, nil
 }
 
-// apiRoot is a function or method a caller of the API calls.
+// apiRoot is what a caller of the API reaches: a function or method it calls,
+// or a variable it assigns and reads.
 type apiRoot struct {
 	name string
-	sig  *types.Signature
+
+	// setter says how a caller sets what the root takes, as a finding words it.
+	setter string
+
+	// takes are the types the caller hands the module through the root, and gives
+	// the types the module hands back.
+	takes, gives []types.Type
 }
 
-// apiRoots returns the exported functions, and the exported methods of exported
-// non-interface types, of the API packages, in name order. An interface's
-// methods are not roots: whether its caller calls them or implements them
-// is the polarity it is reached in.
+// funcRoot is a function or method a caller calls: it takes the parameters
+// and gives the results.
+func funcRoot(name string, sig *types.Signature) apiRoot {
+	root := apiRoot{name: name, setter: "by callers of " + name}
+	for param := range sig.Params().Variables() {
+		root.takes = append(root.takes, param.Type())
+	}
+	for result := range sig.Results().Variables() {
+		root.gives = append(root.gives, result.Type())
+	}
+	return root
+}
+
+// apiRoots returns the exported functions and variables, and the exported
+// methods of exported non-interface types, of the API packages, in name order.
+// A caller both assigns a variable and reads it. An interface's methods are not
+// roots: whether its caller calls them or implements them is the polarity
+// it is reached in.
 func apiRoots(pkgs []*packages.Package, surface *apiSurface) []apiRoot {
 	var roots []apiRoot
 	for _, pkg := range pkgs {
@@ -133,7 +161,15 @@ func apiRoots(pkgs []*packages.Package, surface *apiSurface) []apiRoot {
 			switch obj := scope.Lookup(name).(type) {
 			case *types.Func:
 				if obj.Exported() {
-					roots = append(roots, apiRoot{name: pkg.PkgPath + "." + name, sig: obj.Signature()})
+					roots = append(roots, funcRoot(pkg.PkgPath+"."+name, obj.Signature()))
+				}
+			case *types.Var:
+				if obj.Exported() {
+					qualified := pkg.PkgPath + "." + name
+					roots = append(roots, apiRoot{
+						name: qualified, setter: "through " + qualified,
+						takes: []types.Type{obj.Type()}, gives: []types.Type{obj.Type()},
+					})
 				}
 			case *types.TypeName:
 				named, ok := obj.Type().(*types.Named)
@@ -143,10 +179,7 @@ func apiRoots(pkgs []*packages.Package, surface *apiSurface) []apiRoot {
 				for selection := range types.NewMethodSet(types.NewPointer(named)).Methods() {
 					method, ok := selection.Obj().(*types.Func)
 					if ok && method.Exported() {
-						roots = append(roots, apiRoot{
-							name: pkg.PkgPath + "." + name + "." + method.Name(),
-							sig:  method.Signature(),
-						})
+						roots = append(roots, funcRoot(pkg.PkgPath+"."+name+"."+method.Name(), method.Signature()))
 					}
 				}
 			}
@@ -158,12 +191,12 @@ func apiRoots(pkgs []*packages.Package, surface *apiSurface) []apiRoot {
 
 // signature walks a signature's parameters in one polarity and its results
 // in another.
-func (in *inert) signature(sig *types.Signature, params, results polarity, root string) {
+func (in *inert) signature(sig *types.Signature, params, results polarity, setter string) {
 	for param := range sig.Params().Variables() {
-		in.walk(param.Type(), params, root)
+		in.walk(param.Type(), params, setter)
 	}
 	for result := range sig.Results().Variables() {
-		in.walk(result.Type(), results, root)
+		in.walk(result.Type(), results, setter)
 	}
 }
 
@@ -173,7 +206,7 @@ func (in *inert) signature(sig *types.Signature, params, results polarity, root 
 // and embedded fields of every struct; and flips polarity across a func type's
 // parameters and an interface method's, which the other side supplies. It stays
 // inside the module.
-func (in *inert) walk(t types.Type, p polarity, root string) {
+func (in *inert) walk(t types.Type, p polarity, setter string) {
 	t = types.Unalias(t)
 	walked, _ := in.walked.At(t).(map[polarity]bool)
 	if walked[p] {
@@ -187,25 +220,25 @@ func (in *inert) walk(t types.Type, p polarity, root string) {
 
 	switch t := t.(type) {
 	case *types.Pointer:
-		in.walk(t.Elem(), p, root)
+		in.walk(t.Elem(), p, setter)
 	case *types.Slice:
-		in.walk(t.Elem(), p, root)
+		in.walk(t.Elem(), p, setter)
 	case *types.Array:
-		in.walk(t.Elem(), p, root)
+		in.walk(t.Elem(), p, setter)
 	case *types.Map:
-		in.walk(t.Key(), p, root)
-		in.walk(t.Elem(), p, root)
+		in.walk(t.Key(), p, setter)
+		in.walk(t.Elem(), p, setter)
 	case *types.Chan:
-		in.walk(t.Elem(), p, root)
+		in.walk(t.Elem(), p, setter)
 	case *types.Signature:
-		in.signature(t, !p, p, root)
+		in.signature(t, !p, p, setter)
 	case *types.Interface:
-		in.methods(t, p, root)
+		in.methods(t, p, setter)
 	case *types.Struct:
-		in.fields(t, p, root)
+		in.fields(t, p, setter)
 	case *types.Named:
 		for arg := range t.TypeArgs().Types() {
-			in.walk(arg, p, root)
+			in.walk(arg, p, setter)
 		}
 		if t.Obj().Pkg() == nil || !in.module[t.Obj().Pkg().Path()] {
 			return
@@ -213,33 +246,33 @@ func (in *inert) walk(t types.Type, p polarity, root string) {
 		switch u := t.Underlying().(type) {
 		case *types.Struct:
 			if p == authored && t.Obj().Exported() {
-				in.subject(t.Obj().Name(), u, root)
+				in.subject(t.Obj().Name(), u, setter)
 			}
-			in.fields(u, p, root)
+			in.fields(u, p, setter)
 		case *types.Interface:
-			in.methods(u, p, root)
+			in.methods(u, p, setter)
 		default:
-			in.walk(u, p, root)
+			in.walk(u, p, setter)
 		}
 	}
 }
 
 // methods walks an interface's exported methods: the other side of the API
 // implements what this side calls.
-func (in *inert) methods(iface *types.Interface, p polarity, root string) {
+func (in *inert) methods(iface *types.Interface, p polarity, setter string) {
 	for method := range iface.Methods() {
 		if method.Exported() {
-			in.signature(method.Signature(), !p, p, root)
+			in.signature(method.Signature(), !p, p, setter)
 		}
 	}
 }
 
 // fields walks a struct's exported fields, and its embedded ones, whose
 // exported fields are promoted.
-func (in *inert) fields(st *types.Struct, p polarity, root string) {
+func (in *inert) fields(st *types.Struct, p polarity, setter string) {
 	for field := range st.Fields() {
 		if field.Exported() || field.Embedded() {
-			in.walk(field.Type(), p, root)
+			in.walk(field.Type(), p, setter)
 		}
 	}
 }
@@ -247,11 +280,11 @@ func (in *inert) fields(st *types.Struct, p polarity, root string) {
 // subject records a subject's exported fields, and those a struct it embeds
 // by value promotes onto it. An embedded field is a container rather than
 // a setting, and is not itself judged.
-func (in *inert) subject(owner string, st *types.Struct, root string) {
+func (in *inert) subject(owner string, st *types.Struct, setter string) {
 	for field := range st.Fields() {
 		if field.Embedded() {
 			if inner, ok := embeddedStruct(field); ok {
-				in.subject(owner, inner, root)
+				in.subject(owner, inner, setter)
 			}
 			continue
 		}
@@ -260,7 +293,7 @@ func (in *inert) subject(owner string, st *types.Struct, root string) {
 		}
 		key := declKey(position(in.fset, field.Pos()))
 		if _, ok := in.subjects[key]; !ok {
-			in.subjects[key] = &subjectField{field: field, owner: owner, root: root}
+			in.subjects[key] = &subjectField{field: field, owner: owner, setter: setter}
 			in.order = append(in.order, key)
 		}
 	}
@@ -436,12 +469,17 @@ func target(info *types.Info, expr ast.Expr, targets map[*ast.SelectorExpr]bool)
 	}
 }
 
-// conversions records, for each conversion to an interface in a live function
-// outside test files, a read of every exported field beneath the converted
-// value: reflection can read any of them, and fmt does.
-func (in *inert) conversions(prog *program) {
+// outflows records a read of every exported field beneath a value live module
+// code outside test files lets out of its sight: converting it to an interface,
+// since reflection can read any of them and fmt does, or handing it to consumer
+// code, which can read any of them too. A value is handed over as an argument
+// of a method selected on an interface a consumer can implement, as a call,
+// a method value or a method expression, and as an argument of a call through
+// a func value of a type the caller supplies through the API. A generic body
+// is judged in each instantiation, where its types are known.
+func (in *inert) outflows(prog *program) {
 	for fn := range prog.funcs {
-		if !fn.Pos().IsValid() {
+		if !fn.Pos().IsValid() || fn.Synthetic != "" && fn.Syntax() == nil {
 			continue
 		}
 		pos := position(in.fset, fn.Pos())
@@ -459,12 +497,110 @@ func (in *inert) conversions(prog *program) {
 		r := in.readerOf(obj)
 		for _, block := range fn.Blocks {
 			for _, instr := range block.Instrs {
-				if conversion, ok := instr.(*ssa.MakeInterface); ok {
-					in.beneath(conversion.X.Type(), r, &typeutil.Map{})
-				}
+				in.outflow(instr, r)
 			}
 		}
 	}
+}
+
+// outflow records the reads one instruction makes by letting values out.
+func (in *inert) outflow(instr ssa.Instruction, r reader) {
+	switch instr := instr.(type) {
+	case *ssa.MakeInterface:
+		in.beneath(instr.X.Type(), r, &typeutil.Map{})
+	case *ssa.MakeClosure:
+		// A bound method value: the closure's binding is the receiver.
+		bound, ok := instr.Fn.(*ssa.Function)
+		if ok && interfaceMethod(bound) != nil && len(instr.Bindings) == 1 && in.implementable(instr.Bindings[0].Type()) {
+			in.handOff(bound.Signature.Params(), 0, r)
+		}
+	}
+	if call, ok := instr.(ssa.CallInstruction); ok {
+		common := call.Common()
+		switch {
+		case common.IsInvoke():
+			if in.implementable(common.Value.Type()) {
+				in.handOff(common.Signature().Params(), 0, r)
+			}
+		case common.StaticCallee() == nil:
+			if t := common.Value.Type(); in.supplied(t) || in.supplied(t.Underlying()) {
+				in.handOff(common.Signature().Params(), 0, r)
+			}
+		}
+	}
+	for _, operand := range instr.Operands(nil) {
+		// A method expression's thunk takes the receiver as its first parameter,
+		// which is the interface itself unless the method is promoted from one
+		// a struct embeds.
+		thunk, ok := (*operand).(*ssa.Function)
+		if !ok || len(thunk.FreeVars) > 0 || thunk.Signature.Params().Len() == 0 {
+			continue
+		}
+		method := interfaceMethod(thunk)
+		if method == nil {
+			continue
+		}
+		params := thunk.Signature.Params()
+		recv := params.At(0).Type()
+		if !types.IsInterface(recv) {
+			recv = method.Signature().Recv().Type()
+		}
+		if in.implementable(recv) {
+			in.handOff(params, 1, r)
+		}
+	}
+}
+
+// interfaceMethod returns the interface method a synthesized thunk or bound
+// method wrapper calls, or nil when fn is none.
+func interfaceMethod(fn *ssa.Function) *types.Func {
+	if fn.Synthetic == "" || fn.Syntax() != nil || fn.Signature.Recv() != nil {
+		return nil
+	}
+	method, ok := fn.Object().(*types.Func)
+	if !ok || method.Signature().Recv() == nil || !types.IsInterface(method.Signature().Recv().Type()) {
+		return nil
+	}
+	return method
+}
+
+// handOff records a read of every exported field beneath the parameters from
+// the first'th on.
+func (in *inert) handOff(params *types.Tuple, first int, r reader) {
+	for i := first; i < params.Len(); i++ {
+		in.beneath(params.At(i).Type(), r, &typeutil.Map{})
+	}
+}
+
+// implementable reports whether code outside the module can implement
+// an interface type: one declared outside it, one open as zerrors uses
+// the word, an interface written in place that carries no unexported method,
+// or one the API takes from its caller, which a consumer satisfies structurally
+// whatever its declaration.
+func (in *inert) implementable(t types.Type) bool {
+	switch t := types.Unalias(t).(type) {
+	case *types.Named:
+		if !types.IsInterface(t) {
+			return false
+		}
+		if t.Obj().Pkg() == nil || !in.module[t.Obj().Pkg().Path()] || !wholemodule.Closed(t) {
+			return true
+		}
+	case *types.Interface:
+		if wholemodule.Implementable(t) {
+			return true
+		}
+	default:
+		return false
+	}
+	return in.supplied(t)
+}
+
+// supplied reports whether the polarity walk crosses t in authored polarity:
+// the caller supplies a value of it.
+func (in *inert) supplied(t types.Type) bool {
+	walked, _ := in.walked.At(types.Unalias(t)).(map[polarity]bool)
+	return walked[authored]
 }
 
 // beneath records a read of every exported field a value of type t holds,

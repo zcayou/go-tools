@@ -11,10 +11,10 @@ import (
 	"golang.org/x/tools/go/types/typeutil"
 )
 
-// bypassing are the verbs under which fmt prints an integer's digits
+// numericVerbs are the verbs under which fmt prints an integer's digits
 // or the rune it encodes rather than calling its String. %x and %X do call
 // a String, but print its bytes in hex, which is no member's name either.
-const bypassing = "dxXobcU"
+const numericVerbs = "dxXoObcU"
 
 // naming are the verbs under which fmt calls a value's String, where it can.
 const naming = "vsq"
@@ -31,15 +31,15 @@ const naming = "vsq"
 // as in "Kind(%d)", is the one place the ordinal is what should print, and %v
 // would call that String again.
 func (a *analysis) formatting(info *types.Info, call *ast.CallExpr, own *enumType) {
-	callee, ok := typeutil.Callee(info, call).(*types.Func)
-	if !ok || call.Ellipsis.IsValid() {
+	callee := typeutil.Callee(info, call)
+	if callee == nil || call.Ellipsis.IsValid() {
 		return
 	}
 	p, ok := a.printerOf(callee)
 	if !ok {
 		return
 	}
-	operands := formattedOperands(info, call, p, callee.Signature())
+	operands := formattedOperands(info, call, p, signatureOf(callee))
 	var generic []formatted
 	for _, operand := range operands {
 		t := info.TypeOf(operand.expr)
@@ -95,7 +95,7 @@ func formattedOperands(info *types.Info, call *ast.CallExpr, p printer, sig *typ
 // member's name.
 func (a *analysis) judgeFormatted(operand formatted, t types.Type, own *enumType) {
 	pos := operand.expr.Pos()
-	numeric := strings.ContainsRune(bypassing, operand.verb)
+	numeric := strings.ContainsRune(numericVerbs, operand.verb)
 	named := strings.ContainsRune(naming, operand.verb) && !operand.sharp
 	if !numeric && !named {
 		return

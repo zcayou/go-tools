@@ -123,9 +123,9 @@ type analysis struct {
 	// modulePaths are the import paths of the module's packages.
 	modulePaths map[string]bool
 
-	// printers are the module's functions, methods and interface methods
-	// that format their operands as fmt does.
-	printers map[*types.Func]printer
+	// printers are the module's functions, methods, interface methods, variables
+	// and fields that format their operands as fmt does.
+	printers map[types.Object]printer
 
 	// genericFormats holds each printer's call in a generic body formatting
 	// a type parameter's value, by the position of its opening parenthesis,

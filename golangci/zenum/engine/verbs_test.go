@@ -32,6 +32,10 @@ var _ = Describe("numeric verbs", func() {
 			// A verb after a malformed or out-of-range index formats nothing, and leaves
 			// the next verb the first operand.
 			"verbs.go:49:58: numeric-verb: example.com/verbs.Kind",
+			// %O and %#O, and %O beneath a Stringer's field, which it does not call.
+			"verbs.go:54:25: numeric-verb: example.com/verbs.Kind",
+			"verbs.go:54:28: numeric-verb: example.com/verbs.Kind",
+			"verbs.go:55:21: numeric-verb: example.com/verbs.Kind",
 		}))
 	})
 
@@ -60,8 +64,8 @@ var _ = Describe("numeric verbs", func() {
 	It("judges every printer: vet's, the module's inferred to a fixed point, and a foreign one by its shape", func() {
 		Expect(analyzeFixture("verbs", engine.Config{})).To(ContainElements(
 			// A printf wrapper, one named for its message, one wrapping a wrapper,
-			// an interface method every converted type implements with one,
-			// and a foreign Infof. A print wrapper formats as %v.
+			// an interface method an implementation of which is one, and a foreign
+			// Infof. A print wrapper formats as %v.
 			"printers.go:37:13: numeric-verb: example.com/verbs.Kind",
 			"printers.go:38:13: numeric-verb: example.com/verbs.Kind",
 			"printers.go:39:14: numeric-verb: example.com/verbs.Kind",
@@ -76,6 +80,29 @@ var _ = Describe("numeric verbs", func() {
 			HavePrefix("printers.go:41:"), HavePrefix("printers.go:42:"),
 			HavePrefix("printers.go:43:"), HavePrefix("printers.go:46:"),
 		))
+	})
+
+	It("judges a logger injected as a func value or an interface", func() {
+		// A field module code assigns a forwarding literal, a printer, and a no-op
+		// beside a printer variable; one assigned printers of both kinds, which
+		// is printf; one named for a printer and never assigned; a copy of a field
+		// into another; a package-level literal; an interface with a no-op
+		// implementation beside a printing one, and one related to its implementation
+		// only by a type assertion; and a parameter of a func type named
+		// for a printer. A func value neither assigned a printer nor named for one
+		// is not judged.
+		Expect(inFile(analyzeFixture("verbs", engine.Config{}), "injected.go")).To(Equal([]string{
+			"injected.go:70:21: numeric-verb: example.com/verbs.Kind",
+			"injected.go:71:22: numeric-verb: example.com/verbs.Kind",
+			"injected.go:72:21: numeric-verb: example.com/verbs.Kind",
+			"injected.go:73:21: numeric-verb: example.com/verbs.Kind",
+			"injected.go:74:20: numeric-verb: example.com/verbs.Kind",
+			"injected.go:75:16: numeric-verb: example.com/verbs.Kind",
+			"injected.go:76:14: numeric-verb: example.com/verbs.Kind",
+			"injected.go:77:28: numeric-verb: example.com/verbs.Kind",
+			"injected.go:78:15: numeric-verb: example.com/verbs.Kind",
+			"injected.go:79:12: numeric-verb: example.com/verbs.Kind",
+		}))
 	})
 
 	It("reports a generic body's operand where an instantiation makes it an enum", func() {

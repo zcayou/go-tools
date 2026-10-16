@@ -52,10 +52,11 @@
 //     and round-trips, the caller sets it, and nothing happens.
 //
 // Which structs a caller hands in is derived by polarity from the api patterns,
-// which inert-field requires. The roots are the exported functions,
-// and the exported methods of exported non-interface types, of the api
-// packages: their parameters are authored by the caller and their results
-// handed to it. The walk crosses pointers, slices, arrays, map keys
+// which inert-field requires. The roots are the exported functions
+// and variables, and the exported methods of exported non-interface types,
+// of the api packages: a function's parameters are authored by the caller
+// and its results handed to it, and a variable is both, since the caller
+// assigns it and reads it. The walk crosses pointers, slices, arrays, map keys
 // and elements, channel elements, type arguments, and the underlying type
 // of a named non-struct type, and descends the exported and embedded fields
 // of every struct it reaches, staying inside the module. Crossing a func type,
@@ -70,12 +71,24 @@
 // tests keep alive does not act on the field. Reading a whole embedded value
 // reads every field it promotes. Converting a value to an interface reads every
 // exported field beneath it, since reflection can, so a subject that is printed
-// counts as read: the rule claims only what it can show. A read inside
-// a String, GoString or Format method, or inside a function echo-functions
-// lists, does not count: echoing a field into text or an identity does not act
-// on it. A field whose doc carries a Deprecated: paragraph is not judged, since
-// keeping a field that does nothing, so callers still compile, is what
-// deprecation means.
+// counts as read: the rule claims only what it can show. Handing a value
+// to consumer code reads every exported field beneath it too, since that code
+// can read any of them: passing it to a method selected, by a call, a method
+// value or a method expression, on an interface a consumer can implement,
+// or to a call through a func value of a type the walk crosses authored.
+// A consumer can implement an interface declared outside the module, one
+// exported from a package another module can import that carries no unexported
+// method, one written in place with no unexported method, and any interface
+// the walk crosses authored, which a consumer satisfies structurally whatever
+// its declaration. A generic body is judged in each instantiation. Returning
+// a value is no hand-off: it cannot be told apart from an accessor echoing
+// a setting back, so a struct the module only stores and returns, as a cache's
+// Put and Get do, is reported, and a module of that shape leaves the rule off
+// or excludes the type. A read inside a String, GoString or Format method,
+// or inside a function echo-functions lists, does not count: echoing a field
+// into text or an identity does not act on it. A field whose doc carries
+// a Deprecated: paragraph is not judged, since keeping a field that does
+// nothing, so callers still compile, is what deprecation means.
 //
 // It is opt-in because it judges an API's design rather than reachability,
 // and a field reserved for a later release is the module's decision.

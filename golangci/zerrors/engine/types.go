@@ -3,8 +3,6 @@ package engine
 import (
 	"go/types"
 	"iter"
-
-	"github.com/zcayou/go-tools/golangci/internal/wholemodule"
 )
 
 // errorInterface is the predeclared error type.
@@ -151,18 +149,6 @@ func (a *analysis) embedsBase(named *types.Named, seen map[*types.Named]bool) bo
 	return false
 }
 
-// closed reports whether a module interface is one whose implementations
-// the module sees all of: unexported, declared in a package no other module can
-// import, or carrying an unexported method.
-func closed(named *types.Named) bool {
-	obj := named.Obj()
-	if !obj.Exported() || !wholemodule.Public(obj.Pkg().Path(), obj.Pkg().Name()) {
-		return true
-	}
-	iface, _ := named.Underlying().(*types.Interface)
-	return iface != nil && hasUnexportedMethod(iface)
-}
-
 // interfaceMethods yields the methods of an interface type, and nothing for any
 // other type.
 func interfaceMethods(t types.Type) iter.Seq[*types.Func] {
@@ -171,15 +157,6 @@ func interfaceMethods(t types.Type) iter.Seq[*types.Func] {
 		return func(func(*types.Func) bool) {}
 	}
 	return iface.Methods()
-}
-
-func hasUnexportedMethod(iface *types.Interface) bool {
-	for method := range iface.Methods() {
-		if !method.Exported() {
-			return true
-		}
-	}
-	return false
 }
 
 // typeName renders a declared type as its package's name and its own.

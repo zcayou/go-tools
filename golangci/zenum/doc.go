@@ -75,7 +75,7 @@
 //     in Convert[Kind]; a constant operand folds away there, so only a computed
 //     one is seen.
 //   - numeric-verb: an ordinal enum value a printer formats under %d, %x, %X,
-//     %o, %b, %c or %U. Those print the ordinal, or the bytes of the name
+//     %o, %O, %b, %c or %U. Those print the ordinal, or the bytes of the name
 //     in hex, and never the member's name. A method of the enum's own type
 //     is exempt for its own values: its String printing a value no member holds
 //     as "Kind(%d)" is the one place the ordinal should print, and %v there
@@ -108,16 +108,30 @@
 //
 // # Formatting
 //
-// numeric-verb and string-bypass judge every printer's operands. A printer
-// is one of the standard-library functions and methods vet's printf analyzer
-// knows by name; a module function or method that forwards its final ...any
-// parameter, spread and unaltered, to a printer, found to a fixed point as vet
-// finds wrappers, printf kind when it also forwards the string before
-// it as the format; a method of a module interface every module type converted
-// to it implements with a printer of one kind; or a foreign function or method
-// whose body the load does not hold, when its name ends in f and its parameters
-// end in a format string and ...any. A print-kind printer formats every operand
-// as %v.
+// numeric-verb and string-bypass judge every printer's operands. The printers
+// are found to a fixed point as vet's printf analyzer finds wrappers,
+// and a step past it:
+//   - a standard-library function or method vet knows by name;
+//   - a module function or method that forwards its final ...any parameter,
+//     spread and unaltered, to a printer, printf kind when it also forwards
+//     the string before it as the format;
+//   - a variable or field of such a func type that module code assigns
+//     a printer: a function literal forwarding as such a function does,
+//     a function or method value naming a printer, or another printer variable
+//     or field, so that a copy carries it;
+//   - a method of a module interface some implementation of which is a printer,
+//     the implementations being the types the module's syntax relates
+//     to the interface by assignability, as refactor/satisfy finds them,
+//     and those an instantiation converts to it;
+//   - a foreign function or method whose body the load does not hold, and any
+//     func value, a variable, field or parameter, whatever it holds, when
+//     its name, or a func value's type's name, ends in f and its parameters end
+//     in a format string and ...any.
+//
+// A func value or interface method that may run a printf printer is printf
+// kind. A no-op among the values or implementations does not stop it being
+// a printer: which runs decides whether the line is printed, not what it would
+// say. A print-kind printer formats every operand as %v.
 //
 // An operand is judged for everything fmt descends into under its verb: struct
 // fields, exported or not, slice and array elements, map keys and values,

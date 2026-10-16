@@ -104,7 +104,7 @@ func (w *walker) walk(t types.Type, top bool, field string) {
 // member's name.
 func (w *walker) enum(v *enumType, field string) {
 	switch {
-	case strings.ContainsRune(bypassing, w.verb):
+	case strings.ContainsRune(numericVerbs, w.verb):
 		w.found[reached{enum: v}] = true
 	case field != "" && enum.Name(v.Type) != nil:
 		w.found[reached{enum: v, field: field}] = true

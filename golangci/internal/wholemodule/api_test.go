@@ -2,6 +2,8 @@ package wholemodule_test
 
 import (
 	"errors"
+	"go/token"
+	"go/types"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -98,5 +100,27 @@ var _ = Describe("Public", func() {
 		Expect(wholemodule.Public("example.com/m/cmd/tool", "main")).To(BeFalse())
 		Expect(wholemodule.Public("example.com/m/internal/x", "x")).To(BeFalse())
 		Expect(wholemodule.Public("example.com/m/a/internal", "internal")).To(BeFalse())
+	})
+})
+
+var _ = Describe("Closed", func() {
+	declare := func(path, name, typeName string, methods ...string) *types.Named {
+		pkg := types.NewPackage(path, name)
+		named := types.NewNamed(types.NewTypeName(token.NoPos, pkg, typeName, nil), nil, nil)
+		funcs := make([]*types.Func, 0, len(methods))
+		for _, method := range methods {
+			sig := types.NewSignatureType(types.NewVar(token.NoPos, pkg, "", named), nil, nil, nil, nil, false)
+			funcs = append(funcs, types.NewFunc(token.NoPos, pkg, method, sig))
+		}
+		named.SetUnderlying(types.NewInterfaceType(funcs, nil).Complete())
+		return named
+	}
+
+	It("is open only when exported from an importable package with exported methods alone", func() {
+		Expect(wholemodule.Closed(declare("example.com/m/lib", "lib", "Sink", "Emit"))).To(BeFalse())
+		Expect(wholemodule.Closed(declare("example.com/m/lib", "lib", "sink", "Emit"))).To(BeTrue())
+		Expect(wholemodule.Closed(declare("example.com/m/internal/x", "x", "Sink", "Emit"))).To(BeTrue())
+		Expect(wholemodule.Closed(declare("example.com/m/cmd/tool", "main", "Sink", "Emit"))).To(BeTrue())
+		Expect(wholemodule.Closed(declare("example.com/m/lib", "lib", "Sink", "Emit", "seal"))).To(BeTrue())
 	})
 })

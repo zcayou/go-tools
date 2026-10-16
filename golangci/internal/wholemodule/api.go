@@ -3,6 +3,7 @@ package wholemodule
 import (
 	"errors"
 	"fmt"
+	"go/types"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -101,6 +102,30 @@ func Public(path, name string) bool {
 	}
 	for element := range strings.SplitSeq(path, "/") {
 		if element == "internal" {
+			return false
+		}
+	}
+	return true
+}
+
+// Closed reports whether a declared interface is one whose implementations
+// the module declaring it sees all of: unexported, declared in a package no
+// other module can import, or carrying an unexported method. Any other
+// interface is open: consumers implement it.
+func Closed(named *types.Named) bool {
+	obj := named.Obj()
+	if !obj.Exported() || obj.Pkg() == nil || !Public(obj.Pkg().Path(), obj.Pkg().Name()) {
+		return true
+	}
+	iface, ok := named.Underlying().(*types.Interface)
+	return ok && !Implementable(iface)
+}
+
+// Implementable reports whether a type outside the package declaring
+// an interface can implement it: the interface carries no unexported method.
+func Implementable(iface *types.Interface) bool {
+	for method := range iface.Methods() {
+		if !method.Exported() {
 			return false
 		}
 	}

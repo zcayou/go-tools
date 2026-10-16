@@ -49,3 +49,8 @@ func malformed(k Kind, n int) {
 	fmt.Printf("%[0]d %[]d %[x]d %[99999999999]d %[3]d %d", k, n)
 	fmt.Printf("%[2]d", k)
 }
+
+func octal(k Kind, n named) {
+	fmt.Printf("%O %#O\n", k, k)
+	fmt.Printf("%O\n", n)
+}

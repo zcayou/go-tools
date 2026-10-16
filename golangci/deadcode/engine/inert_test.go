@@ -51,6 +51,36 @@ var _ = Describe("inert-field", func() {
 			"Reply.Accepted is set by callers of inertfield/net.Register and read by nothing; act on it or remove it")))
 	})
 
+	Context("when the module hands a value to consumer code", func() {
+		handoff := engine.Config{Dir: fixtureDir("handoff"), API: []string{"./..."}, Rules: []engine.Rule{engine.RuleInertField}}
+
+		It("counts every exported field beneath it as read", func(ctx SpecContext) {
+			// Handed to an open interface's method by a call, a method expression
+			// through a generic helper, and a method value; to an unexported interface
+			// an exported function takes; and to a func the caller supplies through
+			// an Options field or an exported variable. Handed only to a closed
+			// interface no API crosses, overwritten after an adapter returns it,
+			// or only stored and returned, a field is still reported, as is one
+			// set through an exported variable and never read.
+			Expect(inertFields(ctx, handoff)).To(ConsistOf(
+				"jobs/events.go:47:2: inert-field: Options.Retries",
+				"jobs/kept.go:6:2: inert-field: Probe.Port",
+				"jobs/kept.go:23:2: inert-field: Verdict.Phase",
+				"jobs/kept.go:24:2: inert-field: Verdict.Code",
+				"jobs/kept.go:40:2: inert-field: Item.Value",
+				"jobs/kept.go:54:2: inert-field: Settings.Region",
+			))
+		})
+
+		It("says a field reached through an exported variable is set through it", func(ctx SpecContext) {
+			found, err := engine.Analyze(ctx, handoff)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(found).To(ContainElement(HaveField("Detail",
+				"Settings.Region is set through handoff/jobs.Defaults and read by nothing; act on it or remove it")))
+		})
+	})
+
 	It("requires api", func(ctx SpecContext) {
 		_, err := engine.Analyze(ctx, engine.Config{Dir: fixtureDir("inertfield"), Rules: []engine.Rule{engine.RuleInertField}})
 

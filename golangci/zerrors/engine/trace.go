@@ -339,7 +339,7 @@ func (t *tracer) callers(fn *ssa.Function, i int) origins {
 	}
 	for _, answer := range t.a.idx.dispatch[obj] {
 		named, ok := types.Unalias(answer.iface).(*types.Named)
-		if !ok || !t.a.module.Declares(named.Obj()) || !closed(named) {
+		if !ok || !t.a.module.Declares(named.Obj()) || !wholemodule.Closed(named) {
 			return structuredOrigin()
 		}
 		for _, site := range t.a.idx.invokes[answer.method] {
@@ -1023,7 +1023,7 @@ func (t *tracer) invoke(fr *frame, call *ssa.CallCommon, index int, at ssa.Value
 		}
 		return origins{produced: t.witness(typeName(named)+"."+call.Method.Name(), at)}
 	}
-	if !closed(named) {
+	if !wholemodule.Closed(named) {
 		return structuredOrigin()
 	}
 	var out origins

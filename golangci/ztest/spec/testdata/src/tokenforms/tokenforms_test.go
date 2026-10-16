@@ -57,3 +57,11 @@ func TestNoEnum(t *testing.T) {
 	mixed = label.String()
 	Expect(mixed).To(Equal("label"))
 }
+
+func TestUnknownValue(t *testing.T) {
+	job := tokenforms.Job{State: states.State(42), Mode: states.Mode("archived")}
+
+	Expect(job.Mode).To(Equal(states.Mode("archived")))
+	Expect(job.State).To(Equal(states.State(42)))
+	Expect(string(job.Mode)).To(Equal("archived")) // want `^token-assertion: asserts the rendered token of states.Mode`
+}

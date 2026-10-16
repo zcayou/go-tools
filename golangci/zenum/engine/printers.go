@@ -9,6 +9,7 @@ import (
 
 	"golang.org/x/tools/go/ssa"
 	"golang.org/x/tools/go/types/typeutil"
+	"golang.org/x/tools/refactor/satisfy"
 )
 
 // printer is how a function formats its operands: printf kind takes a format
@@ -50,34 +51,88 @@ var known = map[string]bool{
 	"(testing.TB).Skip": true, "(testing.TB).Skipf": true,
 }
 
-// printerOf returns how fn formats its operands, if it is a printer: one vet
-// knows by name; a module function, method or interface method inferred
-// to be one; or a foreign function or method whose body the load does not hold,
-// when its name ends in f and its parameters end in a format string and ...any.
-func (a *analysis) printerOf(fn *types.Func) (printer, bool) {
-	fn = fn.Origin()
-	if p, ok := a.printers[fn]; ok {
-		return p, true
+// printerOf returns how obj formats its operands, if it is a printer:
+//   - a function or method vet knows by name;
+//   - a module function, method, interface method, variable or field inferred
+//     to be one;
+//   - a foreign function or method whose body the load does not hold, when its
+//     name ends in f and its parameters end in a format string and ...any;
+//   - or a func value of that shape, a variable, field or parameter, whose name
+//     or whose type's name ends in f, whatever it holds.
+func (a *analysis) printerOf(obj types.Object) (printer, bool) {
+	switch obj := obj.(type) {
+	case *types.Func:
+		fn := obj.Origin()
+		if p, ok := a.printers[fn]; ok {
+			return p, true
+		}
+		if known[fn.FullName()] {
+			return shaped(fn.Signature(), strings.HasSuffix(fn.Name(), "f"))
+		}
+		if fn.Pkg() == nil || a.modulePackage(fn.Pkg()) || !strings.HasSuffix(fn.Name(), "f") {
+			return printer{}, false
+		}
+		return shaped(fn.Signature(), true)
+	case *types.Var:
+		v := obj.Origin()
+		if p, ok := a.printers[v]; ok {
+			return p, true
+		}
+		sig := funcSignature(v.Type())
+		if sig == nil || !namedPrintf(v) {
+			return printer{}, false
+		}
+		return shaped(sig, true)
 	}
-	if known[fn.FullName()] {
-		return shaped(fn, strings.HasSuffix(fn.Name(), "f"))
-	}
-	if fn.Pkg() == nil || a.modulePackage(fn.Pkg()) {
-		return printer{}, false
-	}
-	if !strings.HasSuffix(fn.Name(), "f") {
-		return printer{}, false
-	}
-	return shaped(fn, true)
+	return printer{}, false
 }
 
-// shaped returns the printer fn's signature makes it: printf kind when it ends
+// signatureOf returns the signature a call through obj has: a function's
+// or method's own, or the type of a func value.
+func signatureOf(obj types.Object) *types.Signature {
+	if fn, ok := obj.(*types.Func); ok {
+		return fn.Signature()
+	}
+	return funcSignature(obj.Type())
+}
+
+// funcSignature returns the signature t is a func type of, or nil.
+func funcSignature(t types.Type) *types.Signature {
+	sig, _ := types.Unalias(t).Underlying().(*types.Signature)
+	return sig
+}
+
+// namedPrintf reports whether a func value is named for a printf printer:
+// its name, or the name of the type it is declared with, ends in f.
+func namedPrintf(v *types.Var) bool {
+	if strings.HasSuffix(v.Name(), "f") {
+		return true
+	}
+	declared, ok := v.Type().(interface{ Obj() *types.TypeName })
+	return ok && strings.HasSuffix(declared.Obj().Name(), "f")
+}
+
+// shaped returns the printer a signature makes: printf kind when it ends
 // in a format string and ...any, and print kind when it ends in ...any.
-func shaped(fn *types.Func, printf bool) (printer, bool) {
-	sig := fn.Signature()
+func shaped(sig *types.Signature, printf bool) (printer, bool) {
 	if printf {
 		at, ok := formatParam(sig)
 		return printer{format: at}, ok
+	}
+	return printer{format: -1}, variadicAny(sig)
+}
+
+// widest returns the printer a func value or interface method of signature
+// sig is when it may run any of the printers found: printf kind when one
+// of them is and sig takes a format, and print kind otherwise.
+func widest(sig *types.Signature, found []printer) (printer, bool) {
+	if len(found) == 0 {
+		return printer{}, false
+	}
+	if slices.ContainsFunc(found, printer.printf) {
+		if at, ok := formatParam(sig); ok {
+			return printer{format: at}, true
+		}
 	}
 	return printer{format: -1}, variadicAny(sig)
 }
@@ -97,16 +152,64 @@ func variadicAny(sig *types.Signature) bool {
 }
 
 // inferPrinters finds the module's printers, as vet's printf analyzer finds
-// the wrappers of the ones it knows, to a least fixed point: a function
-// or method whose final parameter is ...any, and whose body forwards it, last
-// and spread, to a printer, without assigning to it or taking its address.
-// It is printf kind when it also forwards the string parameter before
-// it as a printf printer's format, and print kind otherwise. A method
-// of a module interface is a printer when every module type converted
-// to the interface implements it with a printer of one kind.
+// the wrappers of the ones it knows, to a least fixed point:
+//   - A function or method whose final parameter is ...any, and whose body
+//     forwards it, last and spread, to a printer, without assigning
+//     to it or taking its address. It is printf kind when it also forwards
+//     the string parameter before it as a printf printer's format, and print
+//     kind otherwise.
+//   - A variable or field of such a func type that module code assigns
+//     a printer: a function literal forwarding as such a function does,
+//     a function or method value naming a printer, or another printer variable
+//     or field, so that copies carry it.
+//   - A method of a module interface some implementation of which is a printer:
+//     a type the interface is satisfied by, as refactor/satisfy finds them
+//     in the module's syntax and as MakeInterface converts to it, which covers
+//     the instantiations.
+//
+// A variable, field or interface method that may run a printf printer is printf
+// kind, and one whose values or implementations are not all printers,
+// as a no-op default is not, is a printer still: which runs decides whether
+// the line is printed, not what it would say.
 func (a *analysis) inferPrinters(functions []*ssa.Function) {
-	a.printers = map[*types.Func]printer{}
-	var candidates []forwarder
+	a.printers = map[types.Object]printer{}
+	candidates := a.candidates()
+	assigned := a.assignments()
+	implementers := a.implementations(functions)
+
+	for changed := true; changed; {
+		changed = false
+		widen := func(obj types.Object, p printer) {
+			if old, ok := a.printers[obj]; !ok || !old.printf() && p.printf() {
+				a.printers[obj] = p
+				changed = true
+			}
+		}
+		for _, c := range candidates {
+			if _, done := a.printers[c.fn]; done {
+				continue
+			}
+			if p, ok := c.forwards(a); ok {
+				widen(c.fn, p)
+			}
+		}
+		for v, values := range assigned {
+			if p, ok := widest(funcSignature(v.Type()), a.valuePrinters(values)); ok {
+				widen(v, p)
+			}
+		}
+		for method, implementing := range implementers {
+			if p, ok := widest(method.Signature(), a.implementedBy(method, implementing)); ok {
+				widen(method, p)
+			}
+		}
+	}
+}
+
+// candidates returns the module's functions and methods whose final parameter
+// is ...any.
+func (a *analysis) candidates() []candidate {
+	var found []candidate
 	for _, pkg := range a.module.Packages {
 		for _, file := range pkg.Syntax {
 			for _, decl := range file.Decls {
@@ -118,56 +221,40 @@ func (a *analysis) inferPrinters(functions []*ssa.Function) {
 				if !ok || !variadicAny(fn.Signature()) {
 					continue
 				}
-				candidates = append(candidates, forwarder{fn: fn, decl: fd, info: pkg.TypesInfo})
+				found = append(found, candidate{fn: fn, sig: fn.Signature(), body: fd.Body, info: pkg.TypesInfo})
 			}
 		}
 	}
-	implementers := a.converted(functions)
-
-	for changed := true; changed; {
-		changed = false
-		for _, c := range candidates {
-			if _, done := a.printers[c.fn]; done {
-				continue
-			}
-			if p, ok := c.forwards(a); ok {
-				a.printers[c.fn] = p
-				changed = true
-			}
-		}
-		for method, converted := range implementers {
-			if _, done := a.printers[method]; done {
-				continue
-			}
-			if p, ok := a.implementedBy(method, converted); ok {
-				a.printers[method] = p
-				changed = true
-			}
-		}
-	}
+	return found
 }
 
-// forwarder is a module function or method that may forward its operands
+// candidate is a module function or method that may forward its operands
 // to a printer.
+type candidate struct {
+	fn *types.Func
+	forwarder
+}
+
+// forwarder is a body that may forward its operands to a printer: a function's
+// or method's, or a function literal's.
 type forwarder struct {
-	fn   *types.Func
-	decl *ast.FuncDecl
+	sig  *types.Signature
+	body *ast.BlockStmt
 	info *types.Info
 }
 
 // forwards reports the printer f is, given the printers found so far.
 func (f forwarder) forwards(a *analysis) (printer, bool) {
-	sig := f.fn.Signature()
-	params := sig.Params()
+	params := f.sig.Params()
 	operands := params.At(params.Len() - 1)
 	var format *types.Var
-	if at, ok := formatParam(sig); ok {
+	if at, ok := formatParam(f.sig); ok {
 		format = params.At(at)
 	}
 
 	var found *printer
 	tainted := false
-	ast.Inspect(f.decl.Body, func(n ast.Node) bool {
+	ast.Inspect(f.body, func(n ast.Node) bool {
 		switch n := n.(type) {
 		case *ast.AssignStmt:
 			tainted = tainted || slices.ContainsFunc(n.Lhs, func(lhs ast.Expr) bool { return f.refers(lhs, operands) })
@@ -177,8 +264,8 @@ func (f forwarder) forwards(a *analysis) (printer, bool) {
 			if found != nil || !n.Ellipsis.IsValid() || !f.refers(n.Args[len(n.Args)-1], operands) {
 				return true
 			}
-			callee, ok := typeutil.Callee(f.info, n).(*types.Func)
-			if !ok {
+			callee := typeutil.Callee(f.info, n)
+			if callee == nil {
 				return true
 			}
 			p, ok := a.printerOf(callee)
@@ -206,34 +293,169 @@ func (f forwarder) refers(expr ast.Expr, v *types.Var) bool {
 	return ok && f.info.Uses[id] == v
 }
 
-// converted returns, for each method of a module interface, the module types
-// converted to that interface.
-func (a *analysis) converted(functions []*ssa.Function) map[*types.Func][]types.Type {
+// assignedValue is a value module code assigns to a variable or field,
+// with the type information of the package writing it.
+type assignedValue struct {
+	expr ast.Expr
+	info *types.Info
+}
+
+// assignments returns, for each variable and field of a func type whose final
+// parameter is ...any, the values module code assigns it: a var spec's value,
+// an assignment statement's, or a struct literal's element.
+func (a *analysis) assignments() map[*types.Var][]assignedValue {
+	found := map[*types.Var][]assignedValue{}
+	for _, pkg := range a.module.Packages {
+		info := pkg.TypesInfo
+		record := func(v *types.Var, value ast.Expr) {
+			if v == nil || v.Name() == "_" {
+				return
+			}
+			if sig := funcSignature(v.Type()); sig != nil && variadicAny(sig) {
+				found[v.Origin()] = append(found[v.Origin()], assignedValue{expr: value, info: info})
+			}
+		}
+		for _, file := range pkg.Syntax {
+			ast.Inspect(file, func(n ast.Node) bool {
+				switch n := n.(type) {
+				case *ast.ValueSpec:
+					if len(n.Names) == len(n.Values) {
+						for i, name := range n.Names {
+							v, _ := info.Defs[name].(*types.Var)
+							record(v, n.Values[i])
+						}
+					}
+				case *ast.AssignStmt:
+					if len(n.Lhs) == len(n.Rhs) && (n.Tok == token.ASSIGN || n.Tok == token.DEFINE) {
+						for i, lhs := range n.Lhs {
+							record(assignedVar(info, lhs), n.Rhs[i])
+						}
+					}
+				case *ast.CompositeLit:
+					elements(info, n, record)
+				}
+				return true
+			})
+		}
+	}
+	return found
+}
+
+// elements calls record with each field a struct literal sets and the value
+// it sets it to, keyed or in order.
+func elements(info *types.Info, lit *ast.CompositeLit, record func(*types.Var, ast.Expr)) {
+	st, ok := types.Unalias(info.TypeOf(lit)).Underlying().(*types.Struct)
+	if !ok {
+		return
+	}
+	for i, elt := range lit.Elts {
+		if kv, ok := elt.(*ast.KeyValueExpr); ok {
+			if key, ok := kv.Key.(*ast.Ident); ok {
+				field, _ := info.Uses[key].(*types.Var)
+				record(field, kv.Value)
+			}
+		} else if i < st.NumFields() {
+			record(st.Field(i), elt)
+		}
+	}
+}
+
+// assignedVar returns the variable or field an assignment's left-hand side
+// writes, or nil.
+func assignedVar(info *types.Info, lhs ast.Expr) *types.Var {
+	switch lhs := ast.Unparen(lhs).(type) {
+	case *ast.Ident:
+		v, _ := info.ObjectOf(lhs).(*types.Var)
+		return v
+	case *ast.SelectorExpr:
+		if selection := info.Selections[lhs]; selection != nil {
+			if selection.Kind() != types.FieldVal {
+				return nil
+			}
+			v, _ := selection.Obj().(*types.Var)
+			return v
+		}
+		v, _ := info.Uses[lhs.Sel].(*types.Var)
+		return v
+	}
+	return nil
+}
+
+// valuePrinters returns the printers among the values assigned to a variable
+// or field.
+func (a *analysis) valuePrinters(values []assignedValue) []printer {
+	var found []printer
+	for _, value := range values {
+		if p, ok := a.valuePrinter(value); ok {
+			found = append(found, p)
+		}
+	}
+	return found
+}
+
+// valuePrinter returns the printer an assigned value is: a function literal
+// forwarding as a module printer does, or a function, method value, variable
+// or field naming a printer.
+func (a *analysis) valuePrinter(value assignedValue) (printer, bool) {
+	switch e := ast.Unparen(value.expr).(type) {
+	case *ast.FuncLit:
+		sig, ok := value.info.TypeOf(e).(*types.Signature)
+		if !ok || !variadicAny(sig) {
+			return printer{}, false
+		}
+		return forwarder{sig: sig, body: e.Body, info: value.info}.forwards(a)
+	case *ast.Ident:
+		return a.printerOf(value.info.Uses[e])
+	case *ast.SelectorExpr:
+		if selection := value.info.Selections[e]; selection != nil {
+			if selection.Kind() == types.MethodExpr {
+				return printer{}, false
+			}
+			return a.printerOf(selection.Obj())
+		}
+		return a.printerOf(value.info.Uses[e.Sel])
+	}
+	return printer{}, false
+}
+
+// implementations returns, for each method of a module interface whose final
+// parameter is ...any, the types the interface is satisfied by: those
+// refactor/satisfy finds in the module's syntax, and those a MakeInterface
+// converts to it.
+func (a *analysis) implementations(functions []*ssa.Function) map[*types.Func][]types.Type {
 	found := map[*types.Func][]types.Type{}
 	seen := map[*types.Func]*typeutil.Map{}
+	add := func(iface, concrete types.Type) {
+		it, ok := iface.Underlying().(*types.Interface)
+		if !ok {
+			return
+		}
+		for method := range it.Methods() {
+			method = method.Origin()
+			if method.Pkg() == nil || !a.modulePackage(method.Pkg()) || !variadicAny(method.Signature()) {
+				continue
+			}
+			if seen[method] == nil {
+				seen[method] = &typeutil.Map{}
+			}
+			if seen[method].At(concrete) == nil {
+				seen[method].Set(concrete, true)
+				found[method] = append(found[method], concrete)
+			}
+		}
+	}
+	var finder satisfy.Finder
+	for _, pkg := range a.module.Packages {
+		finder.Find(pkg.TypesInfo, pkg.Syntax)
+	}
+	for constraint := range finder.Result {
+		add(constraint.LHS, constraint.RHS)
+	}
 	for _, fn := range functions {
 		for _, block := range fn.Blocks {
 			for _, instr := range block.Instrs {
-				conversion, ok := instr.(*ssa.MakeInterface)
-				if !ok {
-					continue
-				}
-				named, ok := types.Unalias(conversion.Type()).(*types.Named)
-				if !ok || named.Obj().Pkg() == nil || !a.modulePackage(named.Obj().Pkg()) {
-					continue
-				}
-				iface, ok := named.Underlying().(*types.Interface)
-				if !ok {
-					continue
-				}
-				for method := range iface.Methods() {
-					if seen[method] == nil {
-						seen[method] = &typeutil.Map{}
-					}
-					if seen[method].At(conversion.X.Type()) == nil {
-						seen[method].Set(conversion.X.Type(), true)
-						found[method] = append(found[method], conversion.X.Type())
-					}
+				if conversion, ok := instr.(*ssa.MakeInterface); ok {
+					add(conversion.Type(), conversion.X.Type())
 				}
 			}
 		}
@@ -241,29 +463,21 @@ func (a *analysis) converted(functions []*ssa.Function) map[*types.Func][]types.
 	return found
 }
 
-// implementedBy reports the printer an interface method is when every type
-// converted to its interface implements it with a printer of one kind.
-func (a *analysis) implementedBy(method *types.Func, implementers []types.Type) (printer, bool) {
-	at, printf := formatParam(method.Signature())
-	if !printf && !variadicAny(method.Signature()) {
-		return printer{}, false
-	}
-	want := printer{format: -1}
-	if printf {
-		want = printer{format: at}
-	}
+// implementedBy returns the printers the types implementing an interface's
+// method implement it with.
+func (a *analysis) implementedBy(method *types.Func, implementers []types.Type) []printer {
+	var found []printer
 	for _, t := range implementers {
 		obj, _, _ := types.LookupFieldOrMethod(t, true, method.Pkg(), method.Name())
 		concrete, ok := obj.(*types.Func)
-		if !ok {
-			return printer{}, false
+		if !ok || concrete.Origin() == method {
+			continue
 		}
-		p, ok := a.printerOf(concrete)
-		if !ok || p.printf() != want.printf() {
-			return printer{}, false
+		if p, ok := a.printerOf(concrete); ok {
+			found = append(found, p)
 		}
 	}
-	return want, len(implementers) > 0
+	return found
 }
 
 // modulePackage reports whether pkg is one the module declares.

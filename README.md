@@ -188,11 +188,15 @@ The verdicts are the analysis itself and are not selectable. Beside them sits
 one opt-in rule, `inert-field`: an exported field of a struct the API takes
 from its caller that no live module code reads, so the caller sets it and
 nothing happens. Which structs a caller hands in is derived from the `api`
-packages' signatures by the direction each value crosses — a parameter is the
-caller's, a result the module's, and a func type or an implemented interface
-method flips it. A read counts only in code production roots reach, outside
-test files; converting a value to an interface reads every exported field
-beneath it, since reflection can; reads in `String`, `GoString`, `Format` and
+packages' signatures and exported variables by the direction each value
+crosses — a parameter is the caller's, a result the module's, a variable both,
+and a func type or an implemented interface method flips it. A read counts only
+in code production roots reach, outside test files; converting a value to an
+interface reads every exported field beneath it, since reflection can, and so
+does handing it to consumer code — to a method of an interface a consumer can
+implement, or to a func the caller supplies. A value only returned is not
+read, so a store that hands back what it was given leaves the rule off or
+excludes the type; reads in `String`, `GoString`, `Format` and
 the `echo-functions` don't count; and a `Deprecated:` field is not judged. Its
 messages open with `inert-field:`. An `echo-functions` entry naming no function
 of the module, or exempting nothing, fails the run.
@@ -455,8 +459,10 @@ and `ordered-comparison`. The last three, and `token-decision`'s comparison
 with a member's value spelled as a number, leave the declaring package alone:
 it owns its encoding. `numeric-verb` and `string-bypass` follow fmt into what
 it formats — fields, elements, map entries — and judge every printer: vet's,
-the module's own wrappers found as vet finds them, and a foreign `…f(format
-string, args ...any)`. `zero-defaults` serves `zero-member`, `related-enums`
+the module's own wrappers found as vet finds them — functions, func variables
+and fields given a printer, and interface methods any implementation of which
+prints, a no-op beside it notwithstanding — and a foreign `…f(format string,
+args ...any)` or a func value whose name or type's name ends in `f`. `zero-defaults` serves `zero-member`, `related-enums`
 `restated`, and `ordered-enums` `ordered-comparison`. A `String` is read rather than run, in
 the forms people write and the three layouts `stringer` generates; a member's
 token is a string reached for its value specifically — read from a table by the
