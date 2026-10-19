@@ -59,6 +59,21 @@ var _ = Describe("Following an error through module code", func() {
 		))
 	})
 
+	It("reads a named result through the closures deferred to define or amend it", func() {
+		// Attributed's raw refusal is replaced by what the closure deferred first
+		// on entry stores, as an attributing adapter's is; AttributedWhen defers
+		// it on one path only and AttributedIf assigns on one path only, so each
+		// still returns the raw refusal. The close-joins copied and closed defer read
+		// what the returns gave, not the raw open failure stored before them, and no
+		// deferred call of theirs recovers, so no recovered panic resumes them
+		// with that store. recovered's deferred call does recover.
+		Expect(analyze("deferred", engine.Config{}, engine.RuleUnstructuredReturn)).To(ConsistOf(
+			"deferred.go:45: unstructured-return: AttributedWhen can return an unstructured error: errors.New",
+			"deferred.go:54: unstructured-return: AttributedIf can return an unstructured error: errors.New",
+			"deferred.go:87: unstructured-return: Recovered can return an unstructured error: os.Open in recovered",
+		))
+	})
+
 	It("does not follow a cause slot, whose value was judged where it was made", func() {
 		// encode stores a raw cause into one Error, Lookup a nameable one into
 		// another. Cause returns a loaded cause and Rewrapped wraps one alone,

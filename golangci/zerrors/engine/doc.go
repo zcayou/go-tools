@@ -54,6 +54,19 @@
 // gives, and a return after the loop does not read them. A local whose address
 // goes anywhere else may be written unseen, and is not judged.
 //
+// Deferred closures are read where they run. The closure deferred first
+// in the function's entry block runs after every other deferred call, so when
+// it assigns a named result on every path through its body, what it stores
+// is what every return yields, replacing what the return statements stored:
+// that is an adapter attributing every error it returns. A closure that is only
+// ever deferred reads a captured local as the function's deferred calls find
+// it, which is what the stores reaching those calls put there, and not every
+// value stored into the local earlier in the body: that is a close-join
+// amending the error the returns gave. A recovered panic resumes the function
+// in a block that returns its named results as the panic left them,
+// and the block is judged only when a deferred call can recover: a function
+// deferred directly that calls recover, or one whose body is not known.
+//
 // What a value can be records, besides its unstructured origins, whether it can
 // be nil, whether it can be what a cause slot holds, and which parameters,
 // or for a closure which captured variables, it can be. A call to a function

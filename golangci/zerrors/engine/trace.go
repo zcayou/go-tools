@@ -122,7 +122,7 @@ func (t *tracer) summary(fn *ssa.Function) *summary {
 	var returns []returned
 	for _, block := range fn.Blocks {
 		ret, ok := block.Instrs[len(block.Instrs)-1].(*ssa.Return)
-		if !ok {
+		if !ok || block == fn.Recover && !recoverable(fn) {
 			continue
 		}
 		each := make([]origins, len(results))
@@ -369,9 +369,61 @@ func (t *tracer) captured(fr *frame, fv *ssa.FreeVar) origins {
 	}
 	var out origins
 	for _, closure := range t.a.idx.closures[fn] {
+		if alloc, ok := closure.Bindings[i].(*ssa.Alloc); ok && deferredOnly(closure) {
+			out = out.join(t.atDefers(fr, alloc))
+			continue
+		}
 		out = out.join(t.binding(fr, closure.Bindings[i]))
 	}
 	return out
+}
+
+// atDefers is a captured local as a closure the function only defers reads
+// it: what the function's deferred calls see, which run where it returns.
+// That is what the stores reaching each of those points put there, and what
+// any closure capturing the local stores, since another deferred call may
+// run first.
+func (t *tracer) atDefers(fr *frame, alloc *ssa.Alloc) origins {
+	if escapes(alloc) {
+		return structuredOrigin()
+	}
+	var out origins
+	for _, block := range alloc.Parent().Blocks {
+		for _, instr := range block.Instrs {
+			if _, ok := instr.(*ssa.RunDefers); !ok {
+				continue
+			}
+			reach := reaching(instr, alloc)
+			if reach.unknown {
+				return t.cell(fr, alloc)
+			}
+			out = out.join(origins{nilable: reach.zero})
+			for _, value := range reach.values {
+				out = out.join(t.trace(fr, value))
+			}
+		}
+	}
+	for _, value := range capturedStores(alloc) {
+		out = out.join(t.trace(fr, value))
+	}
+	return out
+}
+
+// deferredOnly reports whether a closure is put to no use but being deferred,
+// so it runs only where its parent's deferred calls run.
+func deferredOnly(closure *ssa.MakeClosure) bool {
+	for _, ref := range *closure.Referrers() {
+		switch ref := ref.(type) {
+		case *ssa.Defer:
+			if ref.Call.Value != closure || slices.Contains(ref.Call.Args, ssa.Value(closure)) {
+				return false
+			}
+		case *ssa.DebugRef:
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // binding is what a closure's binding of a free variable holds: a captured
@@ -433,10 +485,19 @@ func (t *tracer) load(fr *frame, load *ssa.UnOp) origins {
 
 // local is a load of a local the function took the address of: what the stores
 // reaching the load put there, and, when a closure capturing the local can run
-// between those stores and the load, what the closure stores.
+// between those stores and the load, what the closure stores. A load of what
+// the function returns, once its deferred calls have run, is what the closure
+// defining the result stores, when one does.
 func (t *tracer) local(fr *frame, load *ssa.UnOp, alloc *ssa.Alloc) origins {
 	if escapes(alloc) {
 		return structuredOrigin()
+	}
+	if stores, ok := definedByDefer(load, alloc); ok {
+		var out origins
+		for _, value := range stores {
+			out = out.join(t.trace(fr, value))
+		}
+		return out
 	}
 	reach := reaching(load, alloc)
 	if reach.unknown {
@@ -470,6 +531,151 @@ func (t *tracer) cell(fr *frame, alloc *ssa.Alloc) origins {
 		out = out.join(t.trace(fr, value))
 	}
 	return out
+}
+
+// definedByDefer returns what the closure defining a local stores, when
+// the load reads the local after the function's deferred calls have run.
+// A closure deferred in the function's entry block before any other defer
+// runs after every other deferred call, so when it assigns the local on every
+// path through its body, its store replaces whatever the returns stored.
+func definedByDefer(load *ssa.UnOp, alloc *ssa.Alloc) ([]ssa.Value, bool) {
+	fn := load.Parent()
+	if !afterDefers(load, alloc) {
+		return nil, false
+	}
+	var first *ssa.Defer
+	for _, instr := range fn.Blocks[0].Instrs {
+		if deferred, ok := instr.(*ssa.Defer); ok {
+			first = deferred
+			break
+		}
+	}
+	if first == nil || first.DeferStack != nil {
+		return nil, false
+	}
+	closure, ok := first.Call.Value.(*ssa.MakeClosure)
+	if !ok {
+		return nil, false
+	}
+	defining, ok := closure.Fn.(*ssa.Function)
+	i := indexOf(closure.Bindings, ssa.Value(alloc))
+	if !ok || i < 0 || !assignsOnEveryPath(defining, defining.FreeVars[i]) {
+		return nil, false
+	}
+	fv := defining.FreeVars[i]
+	var stores []ssa.Value
+	for _, use := range *fv.Referrers() {
+		if store, ok := use.(*ssa.Store); ok && store.Addr == fv {
+			stores = append(stores, store.Val)
+		}
+	}
+	return append(stores, capturedStores(fv)...), true
+}
+
+// afterDefers reports whether a load reads a local once the function's deferred
+// calls have run: in the block a recovered panic resumes at, or after
+// the deferred calls a return runs, with nothing storing in between.
+func afterDefers(load *ssa.UnOp, alloc *ssa.Alloc) bool {
+	block := load.Block()
+	if block == load.Parent().Recover {
+		return true
+	}
+	for _, instr := range slices.Backward(block.Instrs[:indexOf(block.Instrs, ssa.Instruction(load))]) {
+		switch instr := instr.(type) {
+		case *ssa.RunDefers:
+			return true
+		case *ssa.Store:
+			if instr.Addr == alloc {
+				return false
+			}
+		case *ssa.Call, *ssa.Go, *ssa.Defer:
+			return false
+		}
+	}
+	return false
+}
+
+// assignsOnEveryPath reports whether a function stores into a captured
+// variable on every path from its entry to a return.
+func assignsOnEveryPath(fn *ssa.Function, fv *ssa.FreeVar) bool {
+	stores := func(block *ssa.BasicBlock) bool {
+		return slices.ContainsFunc(block.Instrs, func(instr ssa.Instruction) bool {
+			store, ok := instr.(*ssa.Store)
+			return ok && store.Addr == fv
+		})
+	}
+	seen := map[*ssa.BasicBlock]bool{}
+	var unassigned func(block *ssa.BasicBlock) bool
+	unassigned = func(block *ssa.BasicBlock) bool {
+		if seen[block] || stores(block) {
+			return false
+		}
+		seen[block] = true
+		if block == fn.Blocks[0] {
+			return true
+		}
+		return slices.ContainsFunc(block.Preds, unassigned)
+	}
+	for _, block := range fn.Blocks {
+		if _, ok := block.Instrs[len(block.Instrs)-1].(*ssa.Return); ok && unassigned(block) {
+			return false
+		}
+	}
+	return true
+}
+
+// recoverable reports whether a deferred call of the function can recover
+// a panic, which resumes the function at its recover block. Only a function
+// deferred directly recovers, by calling recover itself, so a deferred
+// builtin never does and one whose body is not known may.
+func recoverable(fn *ssa.Function) bool {
+	for _, deferred := range defers(fn) {
+		if _, builtin := deferred.Call.Value.(*ssa.Builtin); builtin {
+			continue
+		}
+		callee := deferred.Call.StaticCallee()
+		if callee == nil || len(callee.Blocks) == 0 || callsRecover(callee) {
+			return true
+		}
+	}
+	return false
+}
+
+func callsRecover(fn *ssa.Function) bool {
+	for _, block := range fn.Blocks {
+		for _, instr := range block.Instrs {
+			call, ok := instr.(*ssa.Call)
+			if !ok {
+				continue
+			}
+			if builtin, ok := call.Call.Value.(*ssa.Builtin); ok && builtin.Name() == "recover" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// defers returns the function's defer statements, and those
+// of the range-over-func loop bodies within it, which defer to an enclosing
+// function.
+func defers(fn *ssa.Function) []*ssa.Defer {
+	var found []*ssa.Defer
+	var walk func(f *ssa.Function, nested bool)
+	walk = func(f *ssa.Function, nested bool) {
+		for _, block := range f.Blocks {
+			for _, instr := range block.Instrs {
+				if deferred, ok := instr.(*ssa.Defer); ok && (!nested || deferred.DeferStack != nil) {
+					found = append(found, deferred)
+				}
+			}
+		}
+		for _, anon := range f.AnonFuncs {
+			walk(anon, true)
+		}
+	}
+	walk(fn, false)
+	return found
 }
 
 // escapes reports whether a local's address is put to a use through which
@@ -559,14 +765,15 @@ type reach struct {
 	unknown bool
 }
 
-func reaching(load *ssa.UnOp, alloc *ssa.Alloc) reach {
+// reaching is what a local holds just before an instruction.
+func reaching(at ssa.Instruction, alloc *ssa.Alloc) reach {
 	var r reach
 	type visit struct {
 		block  *ssa.BasicBlock
 		called bool
 	}
 	seen := map[visit]bool{}
-	entry := load.Parent().Blocks[0]
+	entry := at.Parent().Blocks[0]
 	var walk func(block *ssa.BasicBlock, upto int, called bool)
 	walk = func(block *ssa.BasicBlock, upto int, called bool) {
 		for _, instr := range slices.Backward(block.Instrs[:upto]) {
@@ -597,8 +804,8 @@ func reaching(load *ssa.UnOp, alloc *ssa.Alloc) reach {
 			}
 		}
 	}
-	block := load.Block()
-	walk(block, indexOf(block.Instrs, ssa.Instruction(load)), false)
+	block := at.Block()
+	walk(block, indexOf(block.Instrs, at), false)
 	return r
 }
 
