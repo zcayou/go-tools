@@ -13,6 +13,10 @@ var _ = Describe("Following an error through module code", func() {
 		// passing on a structured argument, an open interface's call, an error
 		// field only ever stored with a structured value, and a judged function
 		// calling itself, which carries its own finding.
+		//
+		// Merge draws nothing either: it wraps the results of a recursion through two
+		// functions, all of whose origins are structured. MergeRaw's recursion
+		// reaches a raw origin.
 		Expect(analyze("followed", engine.Config{Sentinels: true}, engine.RuleUnstructuredReturn)).To(ConsistOf(
 			"followed.go:17: unstructured-return: Open can return an unstructured error: fmt.Errorf in readManifest",
 			"followed.go:21: unstructured-return: Wrapped can return an unstructured error: io.EOF",
@@ -21,6 +25,7 @@ var _ = Describe("Following an error through module code", func() {
 			"followed.go:63: unstructured-return: Run can return an unstructured error: os.Remove in run",
 			"followed.go:74: unstructured-return: Recursive can return an unstructured error: errors.New in countdown",
 			"followed.go:88: unstructured-return: Immediate can return an unstructured error: io.EOF",
+			"followed.go:116: unstructured-return: MergeRaw can return an unstructured error: io.EOF in mergeRaw",
 		))
 	})
 

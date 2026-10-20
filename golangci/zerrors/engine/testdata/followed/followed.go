@@ -87,3 +87,47 @@ func Immediate() error {
 	err := io.EOF
 	return func() error { return err }()
 }
+
+func Merge(depth int) error { return merge(depth) }
+
+func merge(depth int) error {
+	if depth == 0 {
+		return &NotFound{}
+	}
+	if depth%2 == 0 {
+		if err := merge(depth - 1); err != nil {
+			return fmt.Errorf("merge %d: %w", depth, err)
+		}
+		return nil
+	}
+	if err := mergeAll(depth - 1); err != nil {
+		return fmt.Errorf("merge all %d: %w", depth, err)
+	}
+	return nil
+}
+
+func mergeAll(depth int) error {
+	if depth < 0 {
+		return nil
+	}
+	return merge(depth)
+}
+
+func MergeRaw(depth int) error { return mergeRaw(depth) }
+
+func mergeRaw(depth int) error {
+	if depth == 0 {
+		return io.EOF
+	}
+	if err := mergeRawAll(depth - 1); err != nil {
+		return fmt.Errorf("merge raw %d: %w", depth, err)
+	}
+	return nil
+}
+
+func mergeRawAll(depth int) error {
+	if depth < 0 {
+		return nil
+	}
+	return mergeRaw(depth)
+}

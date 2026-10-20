@@ -42,6 +42,10 @@ type tracer struct {
 type summary struct {
 	epoch int
 
+	// made reports that a pass has finished the summary once, so its results
+	// say what the function can return rather than what was found so far.
+	made bool
+
 	// results are the origins each result can have, over every return.
 	results []origins
 
@@ -139,7 +143,7 @@ func (t *tracer) summary(fn *ssa.Function) *summary {
 			t.changed = true
 		}
 	}
-	s.results, s.returns = results, returns
+	s.results, s.returns, s.made = results, returns, true
 	return s
 }
 
@@ -1257,7 +1261,12 @@ func (t *tracer) invoke(fr *frame, call *ssa.CallCommon, index int, at ssa.Value
 // finding.
 func (t *tracer) follow(fr *frame, call *ssa.CallCommon, callee *ssa.Function, index int, invoked bool) origins {
 	s := t.summary(callee)
-	if index >= len(s.results) {
+	// Only a call that recurses meets a summary no pass has finished. Its empty
+	// results would read as nil, making a wrapping of them an error of its own
+	// that every later pass reads back through the recursion. Such a call
+	// counts as structured instead, since the next pass reads the finished
+	// summary and still finds an unstructured origin anywhere in the recursion.
+	if !s.made || index >= len(s.results) {
 		return structuredOrigin()
 	}
 	result := s.results[index]

@@ -101,14 +101,16 @@
 // unstructured stays with the caller instantiating it.
 //
 // Summaries are computed on demand, and a call met while its own callee
-// is still being summarized reads what is known of it so far. So the engine
-// summarizes every judged function in passes, each recomputing every summary
-// from what the last one found, until a pass changes nothing. Whether
-// a wrapping is structured does not only grow with what its operands can be,
-// since an operand that could only be nil comes to structure it once
-// a structured origin reaches it, so the passes are bounded too. The witness
-// a summary names is the earliest by file name and offset, so every run names
-// the same one.
+// is still being summarized reads the summary the last pass finished. Before
+// any pass has, the call counts as structured: read as empty, a recursion's
+// results would make a wrapping of them an error of its own, which every later
+// pass would read back through the recursion. So the engine summarizes
+// every judged function in passes, each recomputing every summary from what
+// the last one found, until a pass changes nothing. Whether a wrapping
+// is structured does not only grow with what its operands can be, since
+// an operand that could only be nil comes to structure it once a structured
+// origin reaches it, so the passes are bounded too. The witness a summary names
+// is the earliest by file name and offset, so every run names the same one.
 //
 // A value reached outside any call — what a field or a package variable
 // is stored with, or what flows into a function from all its callers —
