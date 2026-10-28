@@ -155,3 +155,23 @@ func beConfigError(setting engine.Setting, problem engine.Problem, value string)
 		HaveField("Value", value),
 	)
 }
+
+// ruleFindings runs the engine and renders the findings of one rule beside
+// the verdicts, each placed relative to the fixture.
+func ruleFindings(ctx SpecContext, cfg engine.Config, rule engine.Rule) []string {
+	GinkgoHelper()
+
+	found, err := engine.Analyze(ctx, cfg)
+	Expect(err).NotTo(HaveOccurred())
+	var reported []string
+	for _, finding := range found {
+		if finding.Rule != rule {
+			continue
+		}
+		rel, err := filepath.Rel(cfg.Dir, finding.Pos.Filename)
+		Expect(err).NotTo(HaveOccurred())
+		reported = append(reported, fmt.Sprintf("%s:%d:%d: %s: %s",
+			rel, finding.Pos.Line, finding.Pos.Column, finding.Category(), finding.Name))
+	}
+	return reported
+}

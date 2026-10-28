@@ -90,13 +90,16 @@ func (e *ConfigError) Error() string {
 	}
 }
 
-// ruleList joins rule tokens for a message.
+// ruleList joins rule tokens for a message, the last two by "and".
 func ruleList(rules []engine.Rule) string {
 	names := make([]string, len(rules))
 	for i, rule := range rules {
 		names[i] = rule.String()
 	}
-	return strings.Join(names, " and ")
+	if len(names) < 2 {
+		return strings.Join(names, "")
+	}
+	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
 }
 
 // Unwrap returns what decoding or the rule selection said.

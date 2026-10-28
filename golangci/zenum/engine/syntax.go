@@ -9,16 +9,17 @@ import (
 	"golang.org/x/tools/go/types/typeutil"
 )
 
-// syntax runs the rules read from source rather than from SSA. Each turns
-// on how a constant is spelled, or on whether a conversion is written at all,
-// and SSA keeps neither: a member's name and the number it stands for are one
-// constant there, and a conversion of a constant folds away.
-func (a *analysis) syntax() {
-	for _, pkg := range a.module.Packages {
-		for _, file := range pkg.Syntax {
+// syntax runs the rules read from source rather than from SSA over the files
+// the corpus judges. Each turns on how a constant is spelled, or on whether
+// a conversion is written at all, and SSA keeps neither: a member's name
+// and the number it stands for are one constant there, and a conversion
+// of a constant folds away.
+func (c *corpus) syntax() {
+	for _, judged := range c.judged {
+		for _, file := range judged.files {
 			for _, decl := range file.Decls {
 				r := &reading{
-					a: a, pkg: pkg, own: a.owner(pkg.TypesInfo, decl),
+					a: c.a, c: c, pkg: judged.pkg, own: c.a.owner(judged.pkg.TypesInfo, decl),
 					skip: map[ast.Expr]bool{}, stored: map[ast.Expr]bool{},
 				}
 				ast.Inspect(decl, r.visit)
@@ -30,6 +31,7 @@ func (a *analysis) syntax() {
 // reading is one walk of a declaration's syntax.
 type reading struct {
 	a   *analysis
+	c   *corpus
 	pkg *packages.Package
 
 	// own is the enum the declaration is a method of, or nil.
@@ -48,13 +50,13 @@ func (r *reading) visit(node ast.Node) bool {
 	info := r.pkg.TypesInfo
 	switch node := node.(type) {
 	case *ast.BinaryExpr:
-		r.a.binary(info, node)
+		r.a.binary(r.pkg, node)
 		r.a.ordering(r.pkg, node)
 		if comparison(node.Op) {
 			r.skip[node.X], r.skip[node.Y] = true, true
 		}
 	case *ast.SwitchStmt:
-		r.a.switchCases(info, node)
+		r.a.switchCases(r.pkg, node)
 		if node.Tag != nil {
 			for _, clause := range node.Body.List {
 				for _, expr := range clause.(*ast.CaseClause).List {
@@ -64,6 +66,10 @@ func (r *reading) visit(node ast.Node) bool {
 		}
 	case *ast.IndexExpr:
 		r.skip[node.Index] = true
+	case *ast.Ident:
+		if r.a.orderedInstantiations {
+			r.a.instantiation(r.pkg, node)
+		}
 	case *ast.CallExpr:
 		r.call(node)
 	}
@@ -91,7 +97,7 @@ func (r *reading) call(call *ast.CallExpr) {
 		}
 		return
 	}
-	r.a.formatting(info, call, r.own)
+	r.c.formatting(info, call, r.own)
 	r.a.extreme(r.pkg, call)
 	if callee, ok := typeutil.Callee(info, call).(*types.Func); ok && atomicWrite(callee) {
 		for _, arg := range call.Args {

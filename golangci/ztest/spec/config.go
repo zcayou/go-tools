@@ -8,8 +8,8 @@ import (
 )
 
 // Config is what the spec rules judge test files under: whose specs owe
-// an identified error, which test files pin a rendering, and which rules
-// run. The ztest linter resolves it from its settings.
+// an identified error, which test files pin a rendering and under which build
+// tags, and which rules run. The ztest linter resolves it from its settings.
 type Config struct {
 	// API narrows the packages whose specs unidentified-error judges. Nil is every
 	// API package: not main, and holding no internal path element.
@@ -18,6 +18,10 @@ type Config struct {
 	// Renderings are the names of the test files that pin the rendering
 	// of the source they are named for, each holding [filepattern.SourceToken].
 	Renderings filepattern.Set
+
+	// BuildTags are the build tags beyond the platform's under which a test
+	// file's build constraints decide whether it can pin a rendering.
+	BuildTags []string
 
 	// Disabled are rules that report nothing. Every rule runs by default.
 	Disabled []Rule

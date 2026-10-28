@@ -84,6 +84,9 @@ func (e *ConfigError) detail() string {
 		return e.cause.Error()
 	case ProblemServesNoRule:
 		return e.key() + " configures only " + ruleList(e.serves()) + ", which the rule selection leaves off"
+	case ProblemNoRenderingPattern:
+		return e.key() + ": an empty list leaves no file to pin a rendering in, " +
+			"so unpinned-rendering would report every one; name a pattern or leave the key out"
 	default:
 		return e.key() + ": " + e.Problem.String()
 	}
@@ -111,7 +114,11 @@ func ruleList(rules []fmt.Stringer) string {
 	for i, rule := range rules {
 		names[i] = rule.String()
 	}
-	return strings.Join(names, " and ")
+	last := len(names) - 1
+	if last < 1 {
+		return strings.Join(names, "")
+	}
+	return strings.Join(names[:last], ", ") + " and " + names[last]
 }
 
 // Unwrap returns what decoding, compiling a pattern, the rule selection,
@@ -193,6 +200,10 @@ const (
 	// ProblemServesNoRule is a setting given while every rule it configures
 	// is off, so it configures nothing.
 	ProblemServesNoRule
+	// ProblemNoRenderingPattern is an explicitly empty rendering-patterns while
+	// unpinned-rendering runs, which then requires every rendering pinned
+	// in no file.
+	ProblemNoRenderingPattern
 )
 
 // String is the problem's token.
@@ -222,6 +233,8 @@ func (p Problem) String() string {
 		return "rule-selection"
 	case ProblemServesNoRule:
 		return "serves-no-rule"
+	case ProblemNoRenderingPattern:
+		return "no-rendering-pattern"
 	default:
 		return "Problem(" + strconv.Itoa(int(p)) + ")"
 	}

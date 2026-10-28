@@ -13,7 +13,7 @@ import (
 )
 
 var _ = Describe("Load", func() {
-	It("loads the module's packages from source, without their tests", func() {
+	It("loads the module's packages from source, holding their tests apart", func() {
 		module, err := wholemodule.Load(fixtureDir("plain"), nil)
 
 		Expect(err).NotTo(HaveOccurred())
@@ -27,6 +27,33 @@ var _ = Describe("Load", func() {
 				Expect(file).NotTo(HaveSuffix("_test.go"))
 			}
 		}
+	})
+
+	It("loads the in-package test variants and external test packages, and no test main", func() {
+		module, err := wholemodule.Load(fixtureDir("plain"), nil)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(paths(module.Tests)).To(ConsistOf("example.com/plain/lib", "example.com/plain/lib_test"))
+		for _, pkg := range module.Tests {
+			Expect(pkg.ForTest).To(Equal("example.com/plain/lib"))
+			Expect(pkg.Syntax).NotTo(BeEmpty())
+			Expect(pkg.TypesInfo).NotTo(BeNil())
+			Expect(pkg.GoFiles).To(ContainElement(HaveSuffix("_test.go")))
+			Expect(module.Package(pkg.Types)).To(BeNil())
+		}
+	})
+
+	It("keeps a test variant's objects, and what only tests import, apart from the plain packages'", func() {
+		module, err := wholemodule.Load(fixtureDir("plain"), nil)
+		Expect(err).NotTo(HaveOccurred())
+		variant := testPackage(module, "example.com/plain/lib")
+
+		hello := variant.Types.Scope().Lookup("Hello")
+
+		Expect(hello).NotTo(BeIdenticalTo(libPackage(module).Types.Scope().Lookup("Hello")))
+		Expect(module.Declares(hello)).To(BeFalse())
+		Expect(module.ImportedPaths()).NotTo(ContainElement("net/url"))
+		Expect(module.ImportedPackage("net/url")).To(BeNil())
 	})
 
 	It("reads dependencies from export data, which declare nothing of the module's", func() {
@@ -134,7 +161,7 @@ var _ = Describe("Load", func() {
 		Expect(err).To(HaveField("Errors", HaveKey("example.com/broken")))
 	})
 
-	It("builds the module's SSA program once, with every module package in it", func() {
+	It("builds the module's SSA program once, with every module package in it and no test", func() {
 		module, err := wholemodule.Load(fixtureDir("plain"), nil)
 		Expect(err).NotTo(HaveOccurred())
 
@@ -145,6 +172,22 @@ var _ = Describe("Load", func() {
 		hello := prog.Packages[libPackage(module).Types].Func("Hello")
 		Expect(hello).NotTo(BeNil())
 		Expect(hello.Blocks).NotTo(BeEmpty())
+	})
+
+	It("builds a test program once, over the module's packages and their tests together", func() {
+		module, err := wholemodule.Load(fixtureDir("plain"), nil)
+		Expect(err).NotTo(HaveOccurred())
+
+		prog := module.TestProgram()
+
+		Expect(module.TestProgram()).To(BeIdenticalTo(prog))
+		Expect(prog).NotTo(BeIdenticalTo(module.Program()))
+		Expect(prog.Packages).To(HaveLen(len(module.Packages) + len(module.Tests)))
+		Expect(prog.Packages[libPackage(module).Types].Func("Hello").Blocks).NotTo(BeEmpty())
+		greeting := prog.Packages[testPackage(module, "example.com/plain/lib").Types].Func("greeting")
+		Expect(greeting).NotTo(BeNil())
+		Expect(greeting.Blocks).NotTo(BeEmpty())
+		Expect(prog.Packages[testPackage(module, "example.com/plain/lib_test").Types].Func("helper")).NotTo(BeNil())
 	})
 })
 

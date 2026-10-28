@@ -19,13 +19,13 @@ import (
 // a member belongs to the package that declares the members.
 func (a *analysis) conversion(pkg *packages.Package, call *ast.CallExpr, to types.Type) {
 	v := a.enumOf(to)
-	if v == nil || v.pkg.Types == pkg.Types || len(call.Args) != 1 {
+	if v == nil || v.inside(pkg) || len(call.Args) != 1 {
 		return
 	}
 	// A constant operand is recorded with the type it is converted to, so only
 	// a computed one can be told to be the enum's already.
 	value := pkg.TypesInfo.Types[call].Value
-	if value == nil && types.Identical(pkg.TypesInfo.TypeOf(call.Args[0]), v.Type) {
+	if value == nil && a.enumOf(pkg.TypesInfo.TypeOf(call.Args[0])) == v {
 		return
 	}
 	if value == nil {
@@ -44,16 +44,16 @@ func (a *analysis) conversion(pkg *packages.Package, call *ast.CallExpr, to type
 func (a *analysis) constant(pkg *packages.Package, expr ast.Expr) {
 	info := pkg.TypesInfo
 	v := a.enumOf(info.TypeOf(expr))
-	if v == nil || v.pkg.Types == pkg.Types {
+	if v == nil || v.inside(pkg) {
 		return
 	}
 	switch expr := ast.Unparen(expr).(type) {
 	case *ast.Ident:
-		if typedConstant(info, expr, v) {
+		if a.typedConstant(info, expr, v) {
 			return
 		}
 	case *ast.SelectorExpr:
-		if typedConstant(info, expr.Sel, v) {
+		if a.typedConstant(info, expr.Sel, v) {
 			return
 		}
 	case *ast.CallExpr:
@@ -66,9 +66,9 @@ func (a *analysis) constant(pkg *packages.Package, expr ast.Expr) {
 
 // typedConstant reports whether id names a constant declared with the enum's
 // type, which is judged where it is declared.
-func typedConstant(info *types.Info, id *ast.Ident, v *enumType) bool {
+func (a *analysis) typedConstant(info *types.Info, id *ast.Ident, v *enumType) bool {
 	named, ok := info.Uses[id].(*types.Const)
-	return ok && types.Identical(named.Type(), v.Type)
+	return ok && a.enumOf(named.Type()) == v
 }
 
 // computed reports a computed value converted to an enum outside its package.
@@ -128,7 +128,7 @@ func (a *analysis) instantiated(functions []*ssa.Function) {
 					a.launder(written.pkg, written.call.Pos(), from.Type(), to.Type())
 				}
 				v := a.enumOf(to.Type())
-				if v == nil || v.pkg.Types == written.pkg.Types || types.Identical(from.Type(), v.Type) {
+				if v == nil || v.inside(written.pkg) || a.enumOf(from.Type()) == v {
 					continue
 				}
 				a.computed(written.call.Pos(), v)
@@ -155,7 +155,7 @@ func (a *analysis) laundered(pkg *packages.Package, call *ast.CallExpr, to types
 // at pos in pkg, that keeps an enum's ordinal and drops its type.
 func (a *analysis) launder(pkg *packages.Package, pos token.Pos, from, to types.Type) {
 	v := a.enumOf(from)
-	if v == nil || !v.Ordinal() || v.pkg.Types == pkg.Types ||
+	if v == nil || !v.Ordinal() || v.inside(pkg) ||
 		types.Identical(from, to) || types.IsInterface(to) || a.enumOf(to) != nil {
 		return
 	}

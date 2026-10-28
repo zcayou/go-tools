@@ -155,6 +155,15 @@ func (p Pattern) Source(name string) (string, bool) {
 	return base, ok && base != ""
 }
 
+// Name returns the file name the pattern gives the source named base, which
+// [Pattern.Source] resolves back to base. It returns empty for a glob pattern.
+func (p Pattern) Name(base string) string {
+	if !p.source {
+		return ""
+	}
+	return p.prefix + base + p.suffix
+}
+
 // between returns what sits between prefix and suffix in s.
 func between(s, prefix, suffix string) (string, bool) {
 	if len(s) < len(prefix)+len(suffix) ||

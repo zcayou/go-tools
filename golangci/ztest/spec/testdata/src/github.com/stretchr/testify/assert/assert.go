@@ -17,6 +17,12 @@ func ErrorIs(t TestingT, err, target error, msgAndArgs ...any) bool { return tru
 
 func EqualError(t TestingT, theError error, errString string, msgAndArgs ...any) bool { return true }
 
+type PanicTestFunc func()
+
+func Panics(t TestingT, f PanicTestFunc, msgAndArgs ...any) bool { return true }
+
+func PanicsWithValue(t TestingT, expected any, f PanicTestFunc, msgAndArgs ...any) bool { return true }
+
 func EqualErrorf(t TestingT, theError error, errString string, msg string, args ...any) bool {
 	return true
 }
@@ -62,3 +68,25 @@ func NotNilf(t TestingT, object any, msg string, args ...any) bool { return true
 func (a *Assertions) NotNil(object any, msgAndArgs ...any) bool { return true }
 
 func Equalf(t TestingT, expected, actual any, msg string, args ...any) bool { return true }
+
+func Truef(t TestingT, value bool, msg string, args ...any) bool { return true }
+
+func False(t TestingT, value bool, msgAndArgs ...any) bool { return true }
+
+func EqualValues(t TestingT, expected, actual any, msgAndArgs ...any) bool { return true }
+
+func Exactly(t TestingT, expected, actual any, msgAndArgs ...any) bool { return true }
+
+func Exactlyf(t TestingT, expected, actual any, msg string, args ...any) bool { return true }
+
+func NotEqualValues(t TestingT, expected, actual any, msgAndArgs ...any) bool { return true }
+
+func ErrorAs(t TestingT, err error, target any, msgAndArgs ...any) bool { return true }
+
+func NotErrorIs(t TestingT, err, target error, msgAndArgs ...any) bool { return true }
+
+func NotErrorAs(t TestingT, err error, target any, msgAndArgs ...any) bool { return true }
+
+func (a *Assertions) True(value bool, msgAndArgs ...any) bool { return true }
+
+func (a *Assertions) Exactly(expected, actual any, msgAndArgs ...any) bool { return true }

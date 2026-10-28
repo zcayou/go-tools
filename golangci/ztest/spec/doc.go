@@ -12,6 +12,9 @@
 // a caller branches on. An assertion on an enum's rendered token says the wrong
 // thing the same way: it breaks on a renamed token while the behavior holds,
 // and passes on the wrong member when String gives two members one token.
+// An assertion that errors.Is found its target, made on the boolean
+// it returned, says too little when it fails: the error searched is gone from
+// the output.
 //
 // # Rules
 //
@@ -26,6 +29,10 @@
 //     file that does not pin that enum's tokens.
 //   - background-context: context.Background or context.TODO in a test file,
 //     where the test framework hands each node a context of its own.
+//   - boolean-identity: what errors.Is or errors.As reported, asserted
+//     as a boolean where the framework has an assertion that reports the error.
+//   - unpinned-rendering, opt-in: an exported error type whose rendering no
+//     test file pins.
 //
 // # What an assertion is
 //
@@ -148,7 +155,8 @@
 // since its file sits in the build cache.
 //
 // Only assertions are judged. A spec comparing a rendering by hand makes a text
-// decision, and decisions in test files are no rule's.
+// decision, which in a test file outside the enum's package is zenum's
+// token-decision.
 //
 // An open enum, whose values come from outside the module, needs no exemption.
 // A spec showing that a value no member holds survives asserts the value
@@ -175,6 +183,90 @@
 // fact records. So kind_test.go pins the tokens of a Kind declared in kind.go,
 // whether its String is written there or generated into kind_string.go.
 //
+// # boolean-identity
+//
+// Expect(errors.Is(err, target)).To(BeTrue()) fails with "Expected false
+// to be true", and the error that was searched is gone from the output. Where
+// the framework has an assertion that runs the search and prints the error when
+// it fails, an identity boolean asserted as a boolean is reported.
+//
+// An identity boolean is a call of the standard library's errors.Is
+// or errors.As; the second result of errors.AsType, bound in a multi-value
+// assignment; a variable declared in a function every write to which is one;
+// or the negation of one, or the conjunction or disjunction of two. A module
+// function wrapping one is none.
+//
+// Gomega's MatchError given an error runs errors.Is and prints the actual
+// error when it fails, so an errors.Is boolean is judged under Gomega. Gomega
+// has no matcher performing errors.As, so an As or AsType boolean is not judged
+// there. testify's ErrorIs, NotErrorIs, ErrorAs and NotErrorAs print the chain,
+// so all three are judged under testify. A combination is judged when every
+// operand is.
+//
+// Reported, in either polarity, are a Gomega assertion whose actual value
+// is a judged identity boolean, under BeTrue, BeFalse, BeTrueBecause
+// or BeFalseBecause, or under Equal, BeEquivalentTo or BeIdenticalTo given
+// a bool, inside Not, And, Or, SatisfyAll and SatisfyAny as anywhere else;
+// and testify's True, False, Equal, EqualValues, Exactly, NotEqual
+// and NotEqualValues, and their f forms, given one as a value under test.
+// A matcher behind WithTransform is about the transform's result, and is not
+// judged. The rule judges every test file, not only an API package's specs:
+// the failure output is the same everywhere.
+//
+// The finding names the function asserted and the assertion to make instead,
+// in the polarity the spec asserts: MatchError(target),
+// or NotTo(MatchError(target)) where the spec denies the match, under Gomega;
+// ErrorIs or NotErrorIs, and ErrorAs or NotErrorAs, under testify. A boolean
+// compared with a bool no constant gives could be held to either,
+// and the finding names both.
+//
+// An identity boolean deciding control flow, one inside a WithTransform
+// function, and a variable also written from anything else are not reported.
+//
+// # unpinned-rendering
+//
+// text-assertion keeps an error's text out of every spec but the one pinning
+// it, and nothing makes that one spec assert the text, so a rendering users
+// read in logs can change unreviewed. The rule is opt-in, because a rendering
+// no spec pins is missing coverage rather than a defect.
+//
+// A subject is an exported defined type declaring Error() string on itself
+// or its pointer, rather than promoting one from a field, where the type
+// and the method each sit in a file that is neither a test nor generated,
+// in a package other than main. A generated file renders what its generator
+// decides, and a cgo file is generated.
+//
+// A candidate is a test file beside the source declaring a subject's Error
+// that a rendering pattern names for that source, under any of its
+// build-constrained variants: a file text-assertion already lets assert
+// the text. A candidate counts only when its build constraints hold under
+// the build tags. Candidates are read from disk, as the pinning check reads its
+// sources, so every pass agrees on which exist.
+//
+// A candidate pins a subject with a positive assertion comparing the text
+// of a subject value exactly. The value is an expression whose static type
+// is the subject, a pointer to it or an instantiation of it, as a composite
+// literal, a typed variable or parameter, a DescribeTable body's parameter,
+// a type assertion and a type switch clause's variable listing the subject
+// alone all are. The assertion is, in Gomega, Equal(s) on the value's Error(),
+// or MatchError(s) on the value, which compares Error() for equality, where s
+// has string type and the matcher stands alone or inside And or SatisfyAll,
+// never inside Or, SatisfyAny, Not or WithTransform; in testify, Equal
+// or Exactly of s and the value's Error(), either way round, or EqualError
+// of the value and s, and their f forms. An Error that renders no text,
+// panicking by design, is pinned by a positive assertion that a function
+// literal whose body is only a call of the value's Error panics: Panic
+// or PanicWith standing alone in Gomega, Panics or PanicsWithValue in testify.
+// An error-typed value, a prefix or substring matcher, and a negated assertion
+// pin nothing.
+//
+// A subject with no candidate is reported on its Error method's name, naming
+// the file the first rendering pattern gives the source declaring it, by every
+// pass holding that source. A subject whose candidates none pins is reported
+// on the package clause of the anchor: the first candidate, in name order,
+// in the external test package, or the first of all when that package holds
+// none.
+//
 // # background-context
 //
 // Since Go 1.24, testing.T, testing.B and testing.F hand out a context canceled
@@ -195,12 +287,13 @@
 //
 // # Configuration
 //
-// [Config] carries the API scope, and the rendering patterns, each holding
-// <source> once. A nil scope judges every API package: one that is not main
-// and holds no internal path element, which a package's own path and name
-// decide with nothing loaded. An explicit scope is the module's to answer,
-// and may fail. An empty pattern set means no file pins a rendering. A rule
-// in [Config.Disabled] reports nothing.
+// [Config] carries the API scope, the rendering patterns, each holding <source>
+// once, and the build tags a candidate's constraints are read under. A nil
+// scope judges every API package: one that is not main and holds no internal
+// path element, which a package's own path and name decide with nothing loaded.
+// An explicit scope is the module's to answer, and may fail. An empty pattern
+// set means no file pins a rendering. A rule in [Config.Disabled] reports
+// nothing.
 //
 // The rules read _test.go files only, so they rely on golangci-lint's
 // run.tests, which a plugin cannot read and which is on by default.
@@ -213,8 +306,21 @@
 // golangci-lint runs an analyzer with facts over every dependency from source,
 // then caches the facts; a configuration running govet already pays that cost.
 //
+// unpinned-rendering adds two facts while it runs, and they are the contract
+// between the passes over one directory. The pass over a declaring package
+// exports one on each subject, naming the file declaring its Error, and one
+// on the package, listing the subjects its own test files pin. golangci-lint
+// analyzes a package with in-package tests only as its test variant,
+// and the external test package imports that variant, so the external test
+// package's pass, which holds none of the package's sources, knows the subjects
+// by the first and joins the second with its own pins: an anchor there is its
+// to report on. An anchor in the package itself arises only where no external
+// candidate exists, and the pass holding it decides alone.
+//
 // # Positions
 //
 // A diagnostic is positioned on the matcher or the testify call it is about,
 // or, for an assertion whose actual value is the text, on that value.
+// unpinned-rendering positions its finding on the subject's Error method name
+// or on the anchor's package clause, as its section states.
 package spec

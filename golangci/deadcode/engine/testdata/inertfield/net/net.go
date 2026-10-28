@@ -77,3 +77,15 @@ func Register(p Plugin) {}
 func Visit(fn func(Visitor)) {}
 
 func hint(o Options) string { return o.Hint }
+
+// Pair is printed, and its halves share one shape.
+type Pair struct {
+	Left  Left
+	Right Right
+}
+
+type Left struct{ Value string }
+
+type Right struct{ Value string }
+
+func Show(p Pair) { fmt.Println(p) }

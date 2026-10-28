@@ -78,6 +78,8 @@ linters:
             allowed: true
             patterns: []
             helper-patterns: [export_test.go]
+          # Every error's text is already pinned in its declaring file's spec.
+          enable: [unpinned-rendering]
 
     depguard:
       rules:

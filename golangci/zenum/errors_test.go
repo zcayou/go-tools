@@ -46,6 +46,14 @@ var _ = Describe("ConfigError", func() {
 		Entry("a setting for rules that are off",
 			&zenum.ConfigError{Problem: zenum.ProblemServesNoRule, Setting: engine.SettingZeroDefaults},
 			"zenum: zero-defaults configures only zero-member, which the rule selection leaves off"),
+		Entry("a setting for two rules that are off",
+			&zenum.ConfigError{Problem: zenum.ProblemServesNoRule, Setting: engine.SettingOrderedEnums},
+			"zenum: ordered-enums configures only ordered-comparison and member-bound, "+
+				"which the rule selection leaves off"),
+		Entry("a setting for every use-site rule, all off",
+			&zenum.ConfigError{Problem: zenum.ProblemServesNoRule, Setting: engine.SettingTests},
+			"zenum: tests configures only token-decision, forged-conversion, laundered-conversion, numeric-verb, "+
+				"string-bypass, ordered-comparison and member-bound, which the rule selection leaves off"),
 		Entry("a decoding failure with no cause",
 			&zenum.ConfigError{Problem: zenum.ProblemUndecodableSettings},
 			"zenum: settings do not decode"),

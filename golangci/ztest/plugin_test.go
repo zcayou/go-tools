@@ -248,17 +248,54 @@ var _ = Describe("Plugin", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(config.Layout.Disabled).To(Equal([]layout.Rule{layout.RuleMisplacedFixture}))
-		Expect(config.Spec.Disabled).To(Equal([]spec.Rule{spec.RuleTextAssertion}))
+		Expect(config.Spec.Disabled).To(Equal([]spec.Rule{spec.RuleTextAssertion, spec.RuleUnpinnedRendering}))
 	})
 
-	It("hands the halves every rule under the default", func() {
+	It("hands the halves every standard rule under the default, leaving unpinned-rendering off", func() {
 		config, err := ztest.Resolve(ztest.Settings{})
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(config.Layout.Disabled).To(BeNil())
-		Expect(config.Spec.Disabled).To(BeNil())
+		Expect(config.Spec.Disabled).To(Equal([]spec.Rule{spec.RuleUnpinnedRendering}))
 		Expect(config.Spec.API).To(BeNil())
 	})
+
+	It("runs unpinned-rendering once enabled, under the build tags given", func() {
+		config, err := ztest.Resolve(ztest.Settings{
+			Enable:    []string{"unpinned-rendering"},
+			BuildTags: []string{"integration"},
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(config.Spec.Disabled).To(BeNil())
+		Expect(config.Spec.BuildTags).To(Equal([]string{"integration"}))
+	})
+
+	It("rejects an explicitly empty rendering-patterns while unpinned-rendering runs", func() {
+		_, err := ztest.New(map[string]any{"enable": []string{"unpinned-rendering"}, "rendering-patterns": []string{}})
+
+		Expect(err).To(MatchError(&ztest.ConfigError{
+			Setting: ztest.SettingRenderingPatterns, Problem: ztest.ProblemNoRenderingPattern,
+		}))
+	})
+
+	DescribeTable("accepts a spec setting while one rule it serves runs",
+		func(settings map[string]any) {
+			_, err := ztest.New(settings)
+
+			Expect(err).NotTo(HaveOccurred())
+		},
+		Entry("build-tags with unpinned-rendering alone",
+			map[string]any{
+				"disable": []string{"unidentified-error"}, "enable": []string{"unpinned-rendering"},
+				"build-tags": []string{"integration"},
+			}),
+		Entry("rendering-patterns with unpinned-rendering alone",
+			map[string]any{
+				"disable": []string{"text-assertion", "token-assertion"}, "enable": []string{"unpinned-rendering"},
+				"rendering-patterns": []string{"<source>_test.go"},
+			}),
+	)
 
 	It("rejects a rule selection that means nothing, naming the key", func() {
 		_, err := ztest.New(map[string]any{"enable": []string{"text-assertion"}})

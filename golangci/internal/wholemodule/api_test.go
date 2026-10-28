@@ -33,22 +33,18 @@ var _ = Describe("ResolveAPI", func() {
 			Pattern:  "./internal/...",
 			Excluded: []string{"example.com/plain/internal/hidden"},
 		}))
-		Expect(err).To(MatchError("pattern ./internal/... matched only main or internal packages, which are not API: " +
-			"example.com/plain/internal/hidden"))
 	})
 
 	It("rejects a pattern matching no package", func() {
 		_, err := wholemodule.ResolveAPI(fixtureDir("plain"), nil, []string{"./docs/..."})
 
 		Expect(err).To(MatchError(&wholemodule.PatternError{Pattern: "./docs/..."}))
-		Expect(err).To(MatchError("pattern ./docs/... matched no packages"))
 	})
 
 	It("rejects a pattern matching only packages outside the module", func() {
 		_, err := wholemodule.ResolveAPI(fixtureDir("plain"), nil, []string{"./lib", "fmt"})
 
 		Expect(err).To(MatchError(&wholemodule.PatternError{Pattern: "fmt", Foreign: []string{"fmt"}}))
-		Expect(err).To(MatchError("pattern fmt matched only packages outside the module: fmt"))
 	})
 
 	It("takes no package outside the module into the API, whatever pattern matches it", func() {
@@ -66,6 +62,24 @@ var _ = Describe("ResolveAPI", func() {
 		Expect(errors.Unwrap(err)).To(MatchError(ContainSubstring("absent")))
 		Expect(err).To(MatchError(HavePrefix("resolving pattern ./absent: ")))
 	})
+})
+
+var _ = Describe("PatternError", func() {
+	DescribeTable("renders the pattern and what it matched",
+		func(err *wholemodule.PatternError, message string) {
+			Expect(err).To(MatchError(message))
+		},
+		Entry("only main or internal packages",
+			&wholemodule.PatternError{
+				Pattern: "./internal/...", Excluded: []string{"example.com/m/internal/a", "example.com/m/cmd"},
+			},
+			"pattern ./internal/... matched only main or internal packages, which are not API: "+
+				"example.com/m/internal/a, example.com/m/cmd"),
+		Entry("only packages outside the module",
+			&wholemodule.PatternError{Pattern: "all", Foreign: []string{"fmt", "os"}},
+			"pattern all matched only packages outside the module: fmt, os"),
+		Entry("nothing", &wholemodule.PatternError{Pattern: "./docs/..."}, "pattern ./docs/... matched no packages"),
+	)
 })
 
 var _ = Describe("ResolvePackages", func() {

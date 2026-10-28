@@ -55,3 +55,42 @@ var _ = Describe("restatements", func() {
 			}),
 	)
 })
+
+var _ = Describe("bridges", func() {
+	listed := engine.Config{RelatedEnums: []engine.Pair{
+		{First: "example.com/bridges/chat.listed", Second: "example.com/bridges/catalog.Presence"},
+	}}
+
+	// partial leaves a member unpaired, merged pairs two members with one,
+	// and Wire is visible: none of them is reported.
+	It("reports a private enum a bridge maps member for member onto another", func() {
+		Expect(analyzeFixture("bridges", listed)).To(Equal([]string{
+			// A switch returning the other's members, one assigning them, a map
+			// literal, and a switch over the visible enum returning the copy's.
+			"chat/copies.go:7:6: restated: example.com/bridges/chat.presence",
+			"chat/copies.go:35:6: restated: example.com/bridges/chat.status",
+			"chat/copies.go:63:6: restated: example.com/bridges/chat.mood",
+			"chat/copies.go:82:6: restated: example.com/bridges/chat.state",
+		}))
+	})
+
+	It("names the bridge and the enum to use", func() {
+		Expect(messages("bridges", listed)).To(HaveKeyWithValue("chat/copies.go:7:6",
+			"restated: presence restates catalog.Presence member for member, as exported maps them; "+
+				"use catalog.Presence"))
+	})
+
+	It("reports a bridged pair no related-enums entry lists", func() {
+		Expect(analyzeFixture("bridges", engine.Config{})).To(
+			ContainElement("chat/copies.go:109:6: restated: example.com/bridges/chat.listed"))
+	})
+
+	It("fails on a related pair neither tokens nor a bridge restate", func() {
+		Expect(analyzeError("bridges", engine.Config{RelatedEnums: []engine.Pair{
+			{First: "example.com/bridges/chat.partial", Second: "example.com/bridges/catalog.Presence"},
+		}})).To(MatchError(&engine.ExceptionError{
+			Setting: engine.SettingRelatedEnums, Fault: engine.FaultNotRestated,
+			Type: "example.com/bridges/chat.partial", Related: "example.com/bridges/catalog.Presence",
+		}))
+	})
+})

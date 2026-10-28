@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"go/types"
 
+	"golang.org/x/tools/go/packages"
 	"golang.org/x/tools/go/ssa"
 
 	"github.com/zcayou/go-tools/golangci/internal/decision"
@@ -36,8 +37,8 @@ func (a *analysis) rendered(value ssa.Value) *enumType {
 		}
 		// A wrapper promoting an embedded enum's String carries the method
 		// it promotes as its object, and renders the same token.
-		if method, ok := callee.Object().(*types.Func); ok && a.byName[method] != nil {
-			return a.byName[method]
+		if method, ok := callee.Object().(*types.Func); ok && a.stringOf(method) != nil {
+			return a.stringOf(method)
 		}
 		if obj := callee.Object(); obj == nil || obj.Pkg() == nil || obj.Pkg().Path() != "fmt" || obj.Name() != "Sprint" {
 			return nil
@@ -79,7 +80,8 @@ func (a *analysis) textual(from, to types.Type) *enumType {
 // a member's value included, since it compares right only while the numbering
 // holds; the declaring package, which owns the numbering, may spell a member's
 // value, as stringer's String does.
-func (a *analysis) comparison(info *types.Info, v *enumType, expr ast.Expr, pos token.Pos) {
+func (a *analysis) comparison(pkg *packages.Package, v *enumType, expr ast.Expr, pos token.Pos) {
+	info := pkg.TypesInfo
 	value := info.Types[expr].Value
 	if a.namesMember(info, v, expr) {
 		return
@@ -93,7 +95,7 @@ func (a *analysis) comparison(info *types.Info, v *enumType, expr ast.Expr, pos 
 		return
 	}
 	if member := v.member(value); member != nil {
-		if info == v.pkg.TypesInfo {
+		if v.inside(pkg) {
 			return
 		}
 		a.report(pos, RuleTokenDecision, v, fmt.Sprintf(
@@ -108,17 +110,8 @@ func (a *analysis) comparison(info *types.Info, v *enumType, expr ast.Expr, pos 
 // namesMember reports whether expr names a constant of the enum that holds
 // a member's value: a member, or a constant re-exporting one.
 func (a *analysis) namesMember(info *types.Info, v *enumType, expr ast.Expr) bool {
-	var id *ast.Ident
-	switch expr := ast.Unparen(expr).(type) {
-	case *ast.Ident:
-		id = expr
-	case *ast.SelectorExpr:
-		id = expr.Sel
-	default:
-		return false
-	}
-	named, ok := info.Uses[id].(*types.Const)
-	return ok && types.Identical(named.Type(), v.Type) && v.Member(named.Val())
+	named, _ := a.memberOf(info, expr)
+	return named == v
 }
 
 // compared returns the enum of a comparison's non-constant operand x,
@@ -131,7 +124,8 @@ func (a *analysis) compared(info *types.Info, x, y ast.Expr) *enumType {
 }
 
 // switchCases judges each constant case of a switch on an enum value.
-func (a *analysis) switchCases(info *types.Info, stmt *ast.SwitchStmt) {
+func (a *analysis) switchCases(pkg *packages.Package, stmt *ast.SwitchStmt) {
+	info := pkg.TypesInfo
 	if stmt.Tag == nil || info.Types[stmt.Tag].Value != nil {
 		return
 	}
@@ -142,22 +136,23 @@ func (a *analysis) switchCases(info *types.Info, stmt *ast.SwitchStmt) {
 	for _, clause := range stmt.Body.List {
 		for _, expr := range clause.(*ast.CaseClause).List {
 			if info.Types[expr].Value != nil {
-				a.comparison(info, v, expr, expr.Pos())
+				a.comparison(pkg, v, expr, expr.Pos())
 			}
 		}
 	}
 }
 
 // binary judges an equality comparison of an enum value with a constant.
-func (a *analysis) binary(info *types.Info, expr *ast.BinaryExpr) {
+func (a *analysis) binary(pkg *packages.Package, expr *ast.BinaryExpr) {
+	info := pkg.TypesInfo
 	if expr.Op != token.EQL && expr.Op != token.NEQ {
 		return
 	}
 	if v := a.compared(info, expr.X, expr.Y); v != nil {
-		a.comparison(info, v, expr.Y, expr.OpPos)
+		a.comparison(pkg, v, expr.Y, expr.OpPos)
 		return
 	}
 	if v := a.compared(info, expr.Y, expr.X); v != nil {
-		a.comparison(info, v, expr.X, expr.OpPos)
+		a.comparison(pkg, v, expr.X, expr.OpPos)
 	}
 }

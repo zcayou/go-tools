@@ -43,6 +43,9 @@ const (
 	// RuleOrderedComparison is an ordering of an enum outside its package
 	// that ordered-enums does not list.
 	RuleOrderedComparison
+	// RuleMemberBound is an ordering of an enum, inside its package, against
+	// its highest member.
+	RuleMemberBound
 )
 
 func (r Rule) String() string {
@@ -71,6 +74,8 @@ func (r Rule) String() string {
 		return "laundered-conversion"
 	case RuleOrderedComparison:
 		return "ordered-comparison"
+	case RuleMemberBound:
+		return "member-bound"
 	default:
 		return fmt.Sprintf("Rule(%d)", int(r))
 	}

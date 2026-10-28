@@ -36,6 +36,15 @@ const (
 	// RuleBackgroundContext fires on context.Background or context.TODO in a test
 	// file, where the test framework hands each node a context of its own.
 	RuleBackgroundContext
+
+	// RuleBooleanIdentity fires on an identity boolean, what errors.Is
+	// or errors.As reported, asserted as a boolean where the framework has
+	// an assertion that reports the error.
+	RuleBooleanIdentity
+
+	// RuleUnpinnedRendering fires on an exported error type whose rendering no
+	// test file pins.
+	RuleUnpinnedRendering
 )
 
 func (r Rule) String() string {
@@ -48,6 +57,10 @@ func (r Rule) String() string {
 		return "token-assertion"
 	case RuleBackgroundContext:
 		return "background-context"
+	case RuleBooleanIdentity:
+		return "boolean-identity"
+	case RuleUnpinnedRendering:
+		return "unpinned-rendering"
 	default:
 		return "Rule(" + strconv.Itoa(int(r)) + ")"
 	}
@@ -61,8 +74,11 @@ An assertion that some error occurred passes on the wrong failure, so in the
 specs of an API package it is reported, and the spec asserts the error's type
 and fields instead. An error's text and an enum's tokens are each asserted once,
 in the test file pinning the rendering of the source that declares them;
-everywhere else a positive assertion on either is reported. A test takes
-the context its framework hands it rather than context.Background.`
+everywhere else a positive assertion on either is reported. Opted in, an error
+type whose rendering no such file pins is reported too. What errors.Is
+or errors.As reported is asserted through the assertion that reports the error,
+not as a boolean. A test takes the context its framework hands it rather than
+context.Background.`
 
 // NewAnalyzer builds the analyzer that judges specs under config.
 func NewAnalyzer(config Config) *analysis.Analyzer {
@@ -72,7 +88,7 @@ func NewAnalyzer(config Config) *analysis.Analyzer {
 		Name:      "spec",
 		Doc:       analyzerDoc,
 		Run:       c.run,
-		FactTypes: []analysis.Fact{(*enumFact)(nil)},
+		FactTypes: []analysis.Fact{(*enumFact)(nil), (*renderingFact)(nil), (*pinsFact)(nil)},
 	}
 }
 
@@ -89,6 +105,7 @@ func (c *checker) run(pass *analysis.Pass) (any, error) {
 
 	var p *passChecker
 	var dir *directory
+	tests := map[string]*ast.File{}
 	for _, file := range pass.Files {
 		// The name on disk, past any //line directive, is what a rendering pattern
 		// and the sibling sources are matched against.
@@ -96,6 +113,7 @@ func (c *checker) run(pass *analysis.Pass) (any, error) {
 		if !strings.HasSuffix(path, testSuffix) {
 			continue
 		}
+		tests[path] = file
 		// Every file of a package sits in one directory, so the first is as good
 		// as any for naming it.
 		if p == nil {
@@ -111,11 +129,18 @@ func (c *checker) run(pass *analysis.Pass) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		f := &fileChecker{passChecker: p, identify: api, pinsText: pinsText, sources: sources}
+		f := &fileChecker{passChecker: p, path: path, identify: api, pinsText: pinsText, sources: sources}
 		f.check(file)
 		p.backgroundContexts(file)
 	}
-	return nil, nil
+	if slices.Contains(c.config.Disabled, RuleUnpinnedRendering) {
+		return nil, nil
+	}
+	var pins map[string]map[typeKey]bool
+	if p != nil {
+		pins = p.pins
+	}
+	return nil, c.unpinned(pass, dir, tests, pins)
 }
 
 // passChecker is what the test files of one pass share: its type information,
@@ -134,6 +159,10 @@ type passChecker struct {
 	causes     map[*types.Var]bool
 	texts      map[*types.Var]textResult
 	renderings map[*types.Var][]enumRef
+	identities map[*types.Var]identityResult
+
+	// pins are the error types each test file, by path, pins the rendering of.
+	pins map[string]map[typeKey]bool
 
 	context     *types.Interface
 	contextRead bool
@@ -147,12 +176,17 @@ func newPassChecker(pass *analysis.Pass, root string) *passChecker {
 		causes:     map[*types.Var]bool{},
 		texts:      map[*types.Var]textResult{},
 		renderings: map[*types.Var][]enumRef{},
+		identities: map[*types.Var]identityResult{},
+		pins:       map[string]map[typeKey]bool{},
 	}
 }
 
 // fileChecker judges the assertions of one test file.
 type fileChecker struct {
 	*passChecker
+
+	// path is the file's name on disk.
+	path string
 
 	// identify reports whether the file belongs to an API package's specs,
 	// which is where unidentified-error is judged.
@@ -172,6 +206,7 @@ func (f *fileChecker) check(file *ast.File) {
 		if call, ok := n.(*ast.CallExpr); ok {
 			f.gomegaMatcher(call, stack)
 			f.gomegaAssertion(call)
+			f.gomegaPin(call)
 			f.testify(call)
 		}
 		return true
@@ -242,9 +277,10 @@ func (p *passChecker) report(pos token.Pos, rule Rule, message string) {
 	if slices.Contains(p.disabled, rule) {
 		return
 	}
-	p.pass.Report(analysis.Diagnostic{
-		Pos:      pos,
-		Category: rule.String(),
-		Message:  rule.String() + ": " + message,
-	})
+	p.pass.Report(diagnostic(pos, rule, message))
+}
+
+// diagnostic is a finding of rule, its message opening with the rule's token.
+func diagnostic(pos token.Pos, rule Rule, message string) analysis.Diagnostic {
+	return analysis.Diagnostic{Pos: pos, Category: rule.String(), Message: rule.String() + ": " + message}
 }

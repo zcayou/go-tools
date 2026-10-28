@@ -15,13 +15,14 @@ import (
 	"golang.org/x/tools/go/ssa"
 )
 
-// loadMode reads the module's own packages from source with full type
-// information and every dependency from export data. Without NeedDeps
-// the loader type checks nothing but the module, which is what makes this load
-// cheaper than deadcode's: no rule that shares it needs a dependency's bodies.
+// loadMode reads the module's own packages and their tests from source, fully
+// typed, and every dependency from export data, telling each test package from
+// a plain one by what it is for. Without NeedDeps the loader type checks
+// nothing but the module, which is what makes this load cheaper than
+// deadcode's: no rule that shares it needs a dependency's bodies.
 const loadMode = packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles |
 	packages.NeedImports | packages.NeedTypes | packages.NeedSyntax | packages.NeedTypesInfo |
-	packages.NeedTypesSizes
+	packages.NeedTypesSizes | packages.NeedForTest
 
 // graphMode lists every package the module imports, directly or transitively,
 // with its export data, which is what the typed load cannot say: export data
@@ -30,9 +31,11 @@ const loadMode = packages.NeedName | packages.NeedFiles | packages.NeedCompiledG
 const graphMode = packages.NeedName | packages.NeedImports | packages.NeedDeps | packages.NeedExportFile
 
 // Module is one typed load of a module's own packages, every package ./...
-// matches from the module root with test files excluded, and the complete
-// type information of every package they import, directly or transitively.
-// It does not change once [Load] returns it, so analyses may read it at once.
+// matches from the module root, and the complete type information of every
+// package they import, directly or transitively. The packages' tests are held
+// apart, in Tests: everything else a Module answers is about the plain
+// packages alone, with test files excluded. It does not change once [Load]
+// returns it, so analyses may read it at once.
 type Module struct {
 	// Root is the module root the load ran in.
 	Root string
@@ -43,6 +46,16 @@ type Module struct {
 	// Packages are the module packages, each with syntax and type information,
 	// in the order the loader returned them.
 	Packages []*packages.Package
+
+	// Tests are the module's test packages, each with syntax and type information,
+	// in the order the loader returned them: a package's variant compiled with its
+	// in-package test files, whose import path is the package's own, and its
+	// external test package, whose path ends in _test. A test package's ForTest
+	// names the package under test. The test mains go test synthesizes are none
+	// of them. A test package type checks on its own, so its objects,
+	// and a variant's copies of the plain package's, are not the plain packages'
+	// objects.
+	Tests []*packages.Package
 
 	byTypes map[*types.Package]*packages.Package
 
@@ -56,6 +69,9 @@ type Module struct {
 
 	ssaOnce sync.Once
 	ssa     *Program
+
+	testOnce sync.Once
+	testSSA  *Program
 }
 
 // Program is the SSA form of a [Module], built over its packages with every
@@ -64,7 +80,8 @@ type Module struct {
 type Program struct {
 	*ssa.Program
 
-	// Packages maps each module package to its SSA package.
+	// Packages maps each package the program builds from syntax to its SSA
+	// package.
 	Packages map[*types.Package]*ssa.Package
 }
 
@@ -83,9 +100,10 @@ type loadEntry struct {
 
 // Load returns the typed load of the module rooted at root under buildTags,
 // loading it on the first request for that root and tag set and returning
-// the same result to every later one. A package that fails to load or type
-// check fails the load, as does an imported package whose export data cannot
-// be read.
+// the same result to every later one. The module's tests are always loaded,
+// so that every linter sharing the load shares one whatever it reads. A package
+// or test package that fails to load or type check fails the load, as does
+// an imported package whose export data cannot be read.
 func Load(root string, buildTags []string) (*Module, error) {
 	tags := slices.Clone(buildTags)
 	slices.Sort(tags)
@@ -107,23 +125,34 @@ func load(root string, buildTags []string) (*Module, error) {
 	if len(buildTags) > 0 {
 		buildFlags = []string{"-tags=" + strings.Join(buildTags, ",")}
 	}
-	pkgs, err := packages.Load(&packages.Config{Mode: loadMode, Dir: root, BuildFlags: buildFlags}, "./...")
+	loaded, err := packages.Load(
+		&packages.Config{Mode: loadMode, Dir: root, BuildFlags: buildFlags, Tests: true}, "./...")
 	if err != nil {
 		return nil, &LoadError{cause: err}
 	}
 
-	if failed := packageErrors(pkgs); len(failed) > 0 {
+	if failed := packageErrors(loaded); len(failed) > 0 {
 		return nil, &LoadError{Errors: failed}
 	}
 
+	var pkgs, tests []*packages.Package
+	for _, pkg := range loaded {
+		switch {
+		case pkg.ForTest != "":
+			tests = append(tests, pkg)
+		case !testMain(pkg):
+			pkgs = append(pkgs, pkg)
+		}
+	}
 	module := &Module{
 		Root:     root,
 		Packages: pkgs,
+		Tests:    tests,
 		byTypes:  make(map[*types.Package]*packages.Package, len(pkgs)),
 		known:    map[string]*types.Package{},
 	}
-	if len(pkgs) > 0 {
-		module.Fset = pkgs[0].Fset
+	if len(loaded) > 0 {
+		module.Fset = loaded[0].Fset
 	} else {
 		module.Fset = token.NewFileSet()
 	}
@@ -135,6 +164,13 @@ func load(root string, buildTags []string) (*Module, error) {
 		return nil, err
 	}
 	return module, nil
+}
+
+// testMain reports whether pkg is a test main go test synthesizes, which
+// imports testing/internal/testdeps: no package outside testing can.
+func testMain(pkg *packages.Package) bool {
+	_, ok := pkg.Imports["testing/internal/testdeps"]
+	return ok
 }
 
 // know records pkg and every package its type information refers to.
@@ -281,31 +317,52 @@ func (m *Module) Declares(obj types.Object) bool {
 	return obj != nil && obj.Pkg() != nil && m.byTypes[obj.Pkg()] != nil
 }
 
-// Program returns the module's SSA program, building it on the first request.
-// Each module package is built from its syntax; each package one of them
-// imports directly is created from its type information, and the builder
-// creates what the bodies need of the rest on demand.
+// Program returns the SSA program of the module's packages, building
+// it on the first request. It holds no test package.
 func (m *Module) Program() *Program {
-	m.ssaOnce.Do(func() {
-		prog := ssa.NewProgram(m.Fset, ssa.InstantiateGenerics)
-		created := map[*types.Package]bool{}
-		for _, pkg := range m.Packages {
-			created[pkg.Types] = true
+	m.ssaOnce.Do(func() { m.ssa = build(m.Fset, m.Packages) })
+	return m.ssa
+}
+
+// TestProgram returns the SSA program of the module's packages and their tests
+// together, building it on the first request. It is a program of its own, apart
+// from [Module.Program]: a test package's bodies call the plain packages'
+// through the test variants, and instantiate their generics with the tests'
+// types.
+func (m *Module) TestProgram() *Program {
+	m.testOnce.Do(func() { m.testSSA = build(m.Fset, slices.Concat(m.Packages, m.Tests)) })
+	return m.testSSA
+}
+
+// build makes the SSA program of pkgs. Each is built from its syntax; each
+// package one of them imports directly is created from its type information,
+// and the builder creates what the bodies need of the rest on demand.
+// A test variant shares its package's import path, so the first package created
+// under a path is the one the program imports by it.
+func build(fset *token.FileSet, pkgs []*packages.Package) *Program {
+	prog := ssa.NewProgram(fset, ssa.InstantiateGenerics)
+	created := map[*types.Package]bool{}
+	paths := map[string]bool{}
+	create := func(pkg *types.Package, syntax *packages.Package) *ssa.Package {
+		created[pkg] = true
+		importable := !paths[pkg.Path()]
+		paths[pkg.Path()] = true
+		if syntax == nil {
+			return prog.CreatePackage(pkg, nil, nil, importable)
 		}
-		for _, pkg := range m.Packages {
-			for _, imported := range pkg.Types.Imports() {
-				if !created[imported] {
-					created[imported] = true
-					prog.CreatePackage(imported, nil, nil, true)
-				}
+		return prog.CreatePackage(pkg, syntax.Syntax, syntax.TypesInfo, importable)
+	}
+	ssaPkgs := make(map[*types.Package]*ssa.Package, len(pkgs))
+	for _, pkg := range pkgs {
+		ssaPkgs[pkg.Types] = create(pkg.Types, pkg)
+	}
+	for _, pkg := range pkgs {
+		for _, imported := range pkg.Types.Imports() {
+			if !created[imported] {
+				create(imported, nil)
 			}
 		}
-		ssaPkgs := make(map[*types.Package]*ssa.Package, len(m.Packages))
-		for _, pkg := range m.Packages {
-			ssaPkgs[pkg.Types] = prog.CreatePackage(pkg.Types, pkg.Syntax, pkg.TypesInfo, true)
-		}
-		prog.Build()
-		m.ssa = &Program{Program: prog, Packages: ssaPkgs}
-	})
-	return m.ssa
+	}
+	prog.Build()
+	return &Program{Program: prog, Packages: ssaPkgs}
 }

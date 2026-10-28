@@ -32,6 +32,8 @@ func (f *fileChecker) testify(call *ast.CallExpr) {
 	if !ok {
 		return
 	}
+	f.testifyIdentity(call, name, values)
+	f.testifyPin(name, values)
 	switch name {
 	case "Error":
 		f.unidentified(call.Pos(), written+" says only that some error occurred; "+

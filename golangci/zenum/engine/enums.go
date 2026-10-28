@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"go/ast"
 	"go/constant"
 	"go/token"
 	"go/types"
@@ -33,16 +34,33 @@ type enumType struct {
 	// zeroDefault reports that zero-defaults lists it.
 	zeroDefault bool
 
-	// orderedEnum reports that ordered-enums lists it, and orderedOutside
-	// that something outside its package orders it.
-	orderedEnum    bool
-	orderedOutside bool
+	// orderedEnum reports that ordered-enums lists it, and excused that the entry
+	// suppressed an ordering a running rule judges.
+	orderedEnum bool
+	excused     bool
 }
 
 // display is the enum as a message names it: qualified by its package's
 // name, as source code spells it.
 func (v *enumType) display() string {
 	return v.pkg.Name + "." + v.Type.Obj().Name()
+}
+
+// inside reports whether pkg's code is the enum's own package's: the package
+// itself, or one of its tests.
+func (v *enumType) inside(pkg *packages.Package) bool {
+	return home(pkg) == v.pkg.PkgPath
+}
+
+// highest returns the first member holding the highest value.
+func (v *enumType) highest() *types.Const {
+	top := v.Members[0]
+	for _, member := range v.Members[1:] {
+		if constant.Compare(member.Val(), token.GTR, top.Val()) {
+			top = member
+		}
+	}
+	return top
 }
 
 // zero returns the first member whose value is zero, or nil.
@@ -131,7 +149,8 @@ func (a *analysis) lookup(qualified string) *enumType {
 	return nil
 }
 
-// enumOf returns the enum t is, or nil.
+// enumOf returns the enum t is, or nil. A test package's copy of an enum
+// is that enum.
 func (a *analysis) enumOf(t types.Type) *enumType {
 	if t == nil {
 		return nil
@@ -140,7 +159,57 @@ func (a *analysis) enumOf(t types.Type) *enumType {
 	if !ok {
 		return nil
 	}
-	return a.byType[named]
+	if v := a.byType[named]; v != nil {
+		return v
+	}
+	if own, ok := a.canonical(named.Obj()).(*types.TypeName); ok && own != named.Obj() {
+		if plain, ok := own.Type().(*types.Named); ok {
+			return a.byType[plain]
+		}
+	}
+	return nil
+}
+
+// stringOf returns the enum method is the String of, or nil.
+func (a *analysis) stringOf(method *types.Func) *enumType {
+	if v := a.byName[method]; v != nil {
+		return v
+	}
+	if own, ok := a.canonical(method).(*types.Func); ok {
+		return a.byName[own]
+	}
+	return nil
+}
+
+// memberOf returns the enum expr names a member of, under the member's own
+// name or a constant re-exporting it, and the member's value.
+func (a *analysis) memberOf(info *types.Info, expr ast.Expr) (*enumType, constant.Value) {
+	var id *ast.Ident
+	switch expr := ast.Unparen(expr).(type) {
+	case *ast.Ident:
+		id = expr
+	case *ast.SelectorExpr:
+		id = expr.Sel
+	default:
+		return nil, nil
+	}
+	named, ok := info.Uses[id].(*types.Const)
+	if !ok {
+		return nil, nil
+	}
+	v := a.enumOf(named.Type())
+	if v == nil || !v.Member(named.Val()) {
+		return nil, nil
+	}
+	return v, named.Val()
+}
+
+// excuse records that an ordered-enums entry suppressed what rule would have
+// reported, when the rule runs.
+func (a *analysis) excuse(v *enumType, rule Rule) {
+	if a.enabled(rule) {
+		v.excused = true
+	}
 }
 
 // declarations judges each enum's declaration: its underlying type, its name,

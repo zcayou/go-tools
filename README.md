@@ -13,11 +13,11 @@ existing CI wiring apply unchanged.
 
 | Name | What it checks | Fixes |
 |---|---|---|
-| `ztest` | Test files follow the repository's layout, and specs say which error and which enum member they got, under the context their framework hands them. | |
-| `deadcode` | Code that nothing can reach, by whole-program call-graph analysis, and fields callers set that nothing reads. | |
+| `ztest` | Test files follow the repository's layout, and specs say which error and which enum member they got, never as a bare boolean, under the context their framework hands them. | |
+| `deadcode` | Code that nothing can reach, by whole-program call-graph analysis, fields callers set that nothing reads, and fields the module writes that nothing reads. | |
 | `zlines` | Line breaks a declaration or comment should not have, and line breaks it should. | `--fix` |
 | `zerrors` | Errors a caller cannot tell apart, decisions on error text, and error fields that should be enums or typed values. | |
-| `zenum` | Enums that are not ordinal, unnamed, ambiguously named, made by conversion, or leaked, printed or ordered as numbers. | |
+| `zenum` | Enums that are not ordinal, unnamed, ambiguously named, restated, made by conversion, or leaked, printed, ordered or bounded as numbers, in code and its tests. | |
 
 Each linter's package doc — [ztest], [deadcode], [zlines], [zerrors], [zenum]
 — is the full reference for its rules; the sections below cover configuration.
@@ -34,8 +34,8 @@ Every linter takes the same three keys, in the shape golangci-lint gives its own
 ```
 
 The rules that run are the default set, plus `enable`, minus `disable`.
-`standard` is every rule but the opt-in ones — only deadcode's `inert-field` is
-opt-in — `all` is every rule, and `none` is none. A selection that changes
+`standard` is every rule but the opt-in ones — deadcode's `inert-field` and
+ztest's `unpinned-rendering` — `all` is every rule, and `none` is none. A selection that changes
 nothing fails the run: an unknown rule, a rule in both lists, enabling one
 already on or disabling one already off, an empty list, a selection leaving
 nothing enabled, and a setting given while every rule it configures is off.
@@ -72,9 +72,10 @@ linters:
             helper-patterns: [helpers_test.go, fakes_test.go]
           adapter-patterns: [suite_test.go]
           api: ['./pkg/...']                    # give zerrors and ztest the same list
-          build-tags: [integration]             # the tags the api patterns resolve under
+          build-tags: [integration]             # the tags api patterns and pin files resolve under
           rendering-patterns: ['<source>_test.go']  # default; [] means no file pins a rendering
-          disable: [background-context]         # every rule is standard
+          enable: [unpinned-rendering]          # opt-in; needs a rendering pattern
+          disable: [background-context]
 ```
 
 A fixture — a package-level declaration specs use — lives in the one file
@@ -109,6 +110,20 @@ exempt from both, and so is a text assertion on `errors.Unwrap(err)`.
 `background-context` reports `context.Background` or `context.TODO` in a test
 file, where `t.Context()` or Ginkgo's `SpecContext` is canceled when the test
 ends or times out; an `Example` and `TestMain` have no context to take.
+
+`boolean-identity` reports an `errors.Is` result asserted as a boolean —
+`Expect(errors.Is(err, target)).To(BeTrue())`, `assert.True(t, errors.Is(…))` —
+whose failure shows no error, in every test file; `MatchError(target)` and
+testify's `ErrorIs` print the chain. Under testify it reports `errors.As` and
+`errors.AsType` results too, since `ErrorAs` prints the chain; Gomega has no
+matcher that does, so an `AsType` ok-check stays. The opt-in
+`unpinned-rendering` reports an exported error type whose text no spec pins:
+the spec file a `rendering-patterns` entry names for the file declaring its
+`Error` asserts that text exactly on a value of the type — `MatchError(s)` or
+`Equal` on `.Error()`, testify's `EqualError` — or, for an `Error` that panics
+by design, that a function calling only `.Error()` panics. The finding sits on
+the `Error` method when no such file exists, and on that file's package clause
+when it pins nothing.
 
 ### zlines
 
@@ -184,10 +199,10 @@ linters:
             - {function: example.com/policy.(*Spec).Fingerprint, reason: folds fields into an identity}
 ```
 
-The verdicts are the analysis itself and are not selectable. Beside them sits
-one opt-in rule, `inert-field`: an exported field of a struct the API takes
-from its caller that no live module code reads, so the caller sets it and
-nothing happens. Which structs a caller hands in is derived from the `api`
+The verdicts are the analysis itself and are not selectable. Beside them sit
+two rules. The opt-in `inert-field` reports an exported field of a struct the
+API takes from its caller that no live module code reads, so the caller sets it
+and nothing happens. Which structs a caller hands in is derived from the `api`
 packages' signatures and exported variables by the direction each value
 crosses — a parameter is the caller's, a result the module's, a variable both,
 and a func type or an implemented interface method flips it. A read counts only
@@ -200,6 +215,24 @@ excludes the type; reads in `String`, `GoString`, `Format` and
 the `echo-functions` don't count; and a `Deprecated:` field is not judged. Its
 messages open with `inert-field:`. An `echo-functions` entry naming no function
 of the module, or exempting nothing, fails the run.
+
+The standard `write-only-field` reports a field of a named struct type that
+module code writes and nothing reads — assigned, incremented, appended to
+itself, set in a composite literal or by an atomic `Store`, or `Add` whose
+result is discarded, and never read. A read counts in live and dead code alike, and so does what reflection
+and equality see: converting a value to an interface reads every field beneath
+it, exported or not, since `fmt` prints them and `reflect.DeepEqual` compares
+them; `==`, a switch, a map key and a `comparable` type argument read every
+field held by value; a value only handed to `context.WithValue`, `sync.Map` or
+`atomic.Value` to hold is not read, while one given as a key is, and neither is
+one converted to an interface only to call its methods, whose bodies count their
+own reads. A production field that only tests read is reported too; a
+`test-facing` package is written for tests, so their reads count toward its
+fields and its own reads count as theirs. With `api` set, the exported fields
+of the types a consumer can hold — every exported type of the api packages, and
+what their signatures reach — are left to the consumer. staticcheck's `unused`
+with `field-writes-are-uses: false` reports the plain cases, and also reports
+printed and compared fields as unused.
 
 With `tests: true`, production code that only test code keeps alive is
 reported as a finding family of its own: every verdict has a `test-only` form
@@ -431,7 +464,7 @@ make their values. A type whose constants are declared by a `<<` shift (a flag
 set) or by multiplying another of its constants (a quantity) is no enum, and an
 unexported constant that closes an iota run and serves as an array length or
 ordering bound (a count sentinel) is no member. It shares zerrors's whole-module
-load.
+load, which holds the module's test packages apart from what zerrors reads.
 
 ```yaml
 linters:
@@ -449,21 +482,36 @@ linters:
           ordered-enums:            # ordinals are an order, so comparing them is meaningful
             - {type: example.com/m/log.Level, reason: severity rises with the ordinal}
           build-tags: [integration]
-          disable: [ordered-comparison]  # every rule is standard
+          tests: true                   # default; matches run.tests
+          ordered-instantiations: true  # judge sorts and other orderings through generics
+          disable: [token-decision]     # every rule is standard
 ```
 
 The rules are `string-enum`, `unnamed`, `unreadable-name`,
 `ambiguous-name`, `zero-member`, `restated`, `token-decision`,
-`forged-conversion`, `numeric-verb`, `string-bypass`, `laundered-conversion`
-and `ordered-comparison`. The last three, and `token-decision`'s comparison
-with a member's value spelled as a number, leave the declaring package alone:
-it owns its encoding. `numeric-verb` and `string-bypass` follow fmt into what
+`forged-conversion`, `numeric-verb`, `string-bypass`, `laundered-conversion`,
+`ordered-comparison` and `member-bound`. `forged-conversion`,
+`laundered-conversion`, `ordered-comparison`, and `token-decision`'s
+comparison with a member's value spelled as a number, leave the declaring
+package alone: it owns its encoding. `member-bound` judges only the declaring
+package: a bound by the highest member, as in `k <= KindC`, silently excludes
+a member appended after it, so a membership test bounds by a count sentinel or
+switches over the members. `restated` also reports an enum nobody outside its
+package sees when a switch or map literal pairs every one of its members with a
+distinct member of another enum: a private copy of a vocabulary, tokens or not.
+The use-site rules judge test files too, a package's own tests, its external
+test package included, counting as inside it; a spec elsewhere that needs a
+value no member holds converts zero, which `forged-conversion` admits while
+zero is no member. `ordered-instantiations` makes `ordered-comparison` judge an
+instantiation, such as `slices.Sort`, that passes the enum at a type parameter
+whose constraint permits ordering. `numeric-verb` and `string-bypass` follow fmt into what
 it formats — fields, elements, map entries — and judge every printer: vet's,
 the module's own wrappers found as vet finds them — functions, func variables
 and fields given a printer, and interface methods any implementation of which
 prints, a no-op beside it notwithstanding — and a foreign `…f(format string,
 args ...any)` or a func value whose name or type's name ends in `f`. `zero-defaults` serves `zero-member`, `related-enums`
-`restated`, and `ordered-enums` `ordered-comparison`. A `String` is read rather than run, in
+`restated`, `ordered-enums` `ordered-comparison` and `member-bound`, `tests` the
+use-site rules, and `ordered-instantiations` `ordered-comparison`. A `String` is read rather than run, in
 the forms people write and the three layouts `stringer` generates; a member's
 token is a string reached for its value specifically — read from a table by the
 receiver, or inside a branch an equality on the receiver entered — and a

@@ -32,6 +32,37 @@ func (*enumFact) String() string {
 	return "enum"
 }
 
+// renderingFact marks an error type whose rendering unpinned-rendering judges.
+// The pass over the package declaring the type exports it, since the external
+// test package's pass holds none of the package's sources and so meets
+// the type only through what it imports.
+type renderingFact struct {
+	// ErrorFile is the file declaring the type's Error method, which the test
+	// files that may pin the rendering are named for.
+	ErrorFile string
+}
+
+func (*renderingFact) AFact() {}
+
+func (*renderingFact) String() string {
+	return "rendering"
+}
+
+// pinsFact lists the error types whose rendering a package's own test files
+// pin. The pass over a package declaring a [renderingFact] type exports it,
+// and the external test package's pass, which imports that package's test
+// variant, joins it with the pins its own files make.
+type pinsFact struct {
+	// Pinned are the names of the types pinned.
+	Pinned []string
+}
+
+func (*pinsFact) AFact() {}
+
+func (*pinsFact) String() string {
+	return "pins"
+}
+
 // exportEnums exports a fact for each enum the pass's package declares.
 func exportEnums(pass *analysis.Pass) {
 	roots := map[string]string{}

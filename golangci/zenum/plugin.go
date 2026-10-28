@@ -44,6 +44,16 @@ type Settings struct {
 	// whose numbers rise with it.
 	OrderedEnums []Exception `json:"ordered-enums"`
 
+	// OrderedInstantiations has ordered-comparison judge a generic instantiated
+	// with an enum whose type parameter's constraint orders it, as slices.Sort's
+	// does. Defaults to false: a sort decides no membership, unless the module
+	// holds output ordered by ordinal to follow declaration order.
+	OrderedInstantiations *bool `json:"ordered-instantiations"`
+
+	// Tests has the use-site rules judge test files. Defaults to true, matching
+	// golangci-lint's run.tests, which a plugin cannot read.
+	Tests *bool `json:"tests"`
+
 	// BuildTags are extra build tags. golangci-lint's run.build-tags cannot
 	// be read from a plugin, so it has to be repeated here.
 	BuildTags []string `json:"build-tags"`
@@ -122,13 +132,19 @@ func configFrom(s Settings) (engine.Config, error) {
 		{engine.SettingZeroDefaults, s.ZeroDefaults != nil},
 		{engine.SettingRelatedEnums, s.RelatedEnums != nil},
 		{engine.SettingOrderedEnums, s.OrderedEnums != nil},
+		{engine.SettingTests, s.Tests != nil},
+		{engine.SettingOrderedInstantiations, s.OrderedInstantiations != nil},
 	} {
 		if given.set && !rules.Any(serves(given.setting)...) {
 			return engine.Config{}, &ConfigError{Problem: ProblemServesNoRule, Setting: given.setting}
 		}
 	}
 
-	config := engine.Config{Disabled: rules.Disabled(catalog)}
+	config := engine.Config{
+		Tests:                 s.Tests == nil || *s.Tests,
+		OrderedInstantiations: s.OrderedInstantiations != nil && *s.OrderedInstantiations,
+		Disabled:              rules.Disabled(catalog),
+	}
 	for i, entry := range s.OpenEnums {
 		if err := validate(engine.SettingOpenEnums, i, entry.Reason, entry.Type); err != nil {
 			return engine.Config{}, err
@@ -192,7 +208,20 @@ var catalog = ruleset.Catalog[engine.Rule]{Rules: []engine.Rule{
 	engine.RuleStringBypass,
 	engine.RuleLaunderedConversion,
 	engine.RuleOrderedComparison,
+	engine.RuleMemberBound,
 }}
+
+// useSite are the rules judging how code uses an enum, which judge test files
+// as they judge the code beside them.
+var useSite = []engine.Rule{
+	engine.RuleTokenDecision,
+	engine.RuleForgedConversion,
+	engine.RuleLaunderedConversion,
+	engine.RuleNumericVerb,
+	engine.RuleStringBypass,
+	engine.RuleOrderedComparison,
+	engine.RuleMemberBound,
+}
 
 // serves returns the rules a setting configures. open-enums takes a type out
 // of every rule, so it configures whichever run.
@@ -203,6 +232,10 @@ func serves(setting engine.Setting) []engine.Rule {
 	case engine.SettingRelatedEnums:
 		return []engine.Rule{engine.RuleRestated}
 	case engine.SettingOrderedEnums:
+		return []engine.Rule{engine.RuleOrderedComparison, engine.RuleMemberBound}
+	case engine.SettingTests:
+		return useSite
+	case engine.SettingOrderedInstantiations:
 		return []engine.Rule{engine.RuleOrderedComparison}
 	default:
 		return catalog.Rules

@@ -228,14 +228,17 @@
 //
 // The engine loads the module once, sharing the load with the zenum linter when
 // both run under the same build tags: module packages from source,
-// and dependencies from export data. The analysis runs once behind
-// a [sync.Once], its findings are indexed by file, and each pass reports those
-// in the files it holds, so reporting is scoped to the packages golangci-lint
-// was asked to lint while the analysis always covers the whole module. A second
-// analyzer whose name is unique to the process defeats golangci-lint's
-// per-package issue cache, which would otherwise replay a finding an edit
-// to some importer had made wrong. Nothing bounds how long the analysis takes,
-// for the reasons the deadcode linter gives.
+// and dependencies from export data. The load holds the module's test packages
+// too, for zenum, apart from the packages this linter reads, so no test file
+// is judged here; a test package that does not type check fails the load all
+// the same. The analysis runs once behind a [sync.Once], its findings
+// are indexed by file, and each pass reports those in the files it holds, so
+// reporting is scoped to the packages golangci-lint was asked to lint while
+// the analysis always covers the whole module. A second analyzer whose name
+// is unique to the process defeats golangci-lint's per-package issue cache,
+// which would otherwise replay a finding an edit to some importer had made
+// wrong. Nothing bounds how long the analysis takes, for the reasons
+// the deadcode linter gives.
 //
 // The errors a linter's run returns reach golangci-lint through
 // analysis.Analyzer.Run, a function value, which is not followed. A module

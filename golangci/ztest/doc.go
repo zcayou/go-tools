@@ -5,10 +5,11 @@
 // in full. The layout rules, in [layout], decide what kind of test file may sit
 // where, what it may be named, where the Ginkgo adapter goes, and which file
 // holds a fixture. The spec rules, in [spec], decide what a spec asserts: which
-// error it got rather than that one occurred, and an error's text and an enum's
-// tokens only in the test file pinning their rendering; and that it runs under
-// the context its framework hands it. Both run inside one analyzer named
-// for the linter, under one settings block.
+// error it got rather than that one occurred, through the assertion
+// that reports it rather than a boolean; an error's text and an enum's tokens
+// only in the test file pinning their rendering, and, opted in, an error's text
+// there; and that it runs under the context its framework hands it. Both run
+// inside one analyzer named for the linter, under one settings block.
 //
 // # Rules
 //
@@ -19,17 +20,18 @@
 //     ginkgo-adapter-file, ginkgo-adapter-missing, ginkgo-adapter-duplicate,
 //     suite-file-contents, misplaced-fixture and single-consumer-helper-file,
 //     which [layout] states;
-//   - unidentified-error, text-assertion, token-assertion
-//     and background-context, which [spec] states.
+//   - unidentified-error, text-assertion, token-assertion, background-context,
+//     boolean-identity and the opt-in unpinned-rendering, which [spec] states.
 //
 // # Settings
 //
 // [Settings] carries a [Category] for each kind of test file, the names
-// reserved for the Ginkgo adapter, the api patterns and the build tags they
-// resolve under, the rendering patterns, and the rule selection. Absent keys
-// take the defaults, which allow black-box files beside a source and standalone
-// files where there is none, judge every API package's specs, and let the test
-// file named for a source pin its renderings:
+// reserved for the Ginkgo adapter, the api patterns, the build tags they
+// resolve under and test files' constraints are read under, the rendering
+// patterns, and the rule selection. Absent keys take the defaults, which allow
+// black-box files beside a source and standalone files where there is none,
+// judge every API package's specs, and let the test file named for a source pin
+// its renderings:
 //
 //	whitebox:
 //	  allowed: false
@@ -48,8 +50,10 @@
 //
 // An absent pattern list takes its default; an explicitly empty one allows
 // nothing, which is how a repository says it wants no helper files at all,
-// or that no file pins a rendering. Disallowing the standalone kind is how
-// a repository says every test sits beside the code it exercises.
+// or that no file pins a rendering. An empty rendering-patterns cannot stand
+// beside unpinned-rendering, which would then require every rendering pinned
+// in no file. Disallowing the standalone kind is how a repository says every
+// test sits beside the code it exercises.
 //
 // A pattern is either a shell glob matched against the file name or a <source>
 // pattern, as [layout] states. A rendering pattern holds <source> exactly once.
@@ -65,12 +69,15 @@
 // be read from a plugin, so a package that exists only under a tag needs
 // the tag repeated here.
 //
-// Every rule is standard, and the default, enable and disable keys choose which
-// run, as every linter of this module chooses. The category blocks
-// and adapter-patterns serve the layout rules, api and build-tags serve
-// unidentified-error, and rendering-patterns serves text-assertion
-// and token-assertion. Giving one while every rule it serves is off configures
-// nothing.
+// Every rule but unpinned-rendering is standard, and the default, enable
+// and disable keys choose which run, as every linter of this module chooses.
+// unpinned-rendering is opt-in because a rendering no spec pins is missing
+// coverage, not a defect. The category blocks and adapter-patterns serve
+// the layout rules, api serves unidentified-error, build-tags serves
+// unidentified-error and unpinned-rendering, which reads a test file's build
+// constraints under the tags, and rendering-patterns serves text-assertion,
+// token-assertion and unpinned-rendering. Giving one while every rule it serves
+// is off configures nothing.
 //
 // A configuration no run could satisfy fails [New]: settings that do not
 // decode, including an unknown key; a rule selection that means nothing,
@@ -78,7 +85,8 @@
 // a path separator or a glob around <source>, a pattern naming the source twice
 // or naming it at all for the standalone kind; an allowed category with no name
 // available to it; an empty adapter-patterns; no kind allowed; an explicitly
-// empty api; and a rendering pattern holding no <source>. What only the module
+// empty api; a rendering pattern holding no <source>; and an explicitly empty
+// rendering-patterns while unpinned-rendering runs. What only the module
 // can answer fails the run instead: an api pattern matching no API package
 // of the module, or an explicit api with no module root to resolve it from.
 // Either way the error is a [*ConfigError] naming the setting and the problem.

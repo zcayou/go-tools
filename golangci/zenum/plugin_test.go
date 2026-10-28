@@ -17,27 +17,42 @@ var _ = Describe("Plugin", func() {
 		func(settings any, expected engine.Config) {
 			Expect(newPlugin(settings).EngineConfig()).To(Equal(expected))
 		},
-		Entry("absent", nil, engine.Config{}),
-		Entry("empty", map[string]any{}, engine.Config{}),
+		Entry("absent", nil, engine.Config{Tests: true}),
+		Entry("empty", map[string]any{}, engine.Config{Tests: true}),
 		Entry("empty lists", map[string]any{
 			"open-enums": []any{}, "zero-defaults": []any{}, "related-enums": []any{}, "ordered-enums": []any{},
-		}, engine.Config{}),
+		}, engine.Config{Tests: true}),
 		Entry("open enums", map[string]any{
 			"open-enums": []any{map[string]any{"type": "example.com/wire.ID", "reason": "IDs come from the wire"}},
-		}, engine.Config{OpenEnums: []string{"example.com/wire.ID"}}),
+		}, engine.Config{OpenEnums: []string{"example.com/wire.ID"}, Tests: true}),
 		Entry("zero defaults, with a dotted import path", map[string]any{
 			"zero-defaults": []any{map[string]any{"type": "example.com/v2.x/kinds.Policy", "reason": "documented"}},
-		}, engine.Config{ZeroDefaults: []string{"example.com/v2.x/kinds.Policy"}}),
+		}, engine.Config{ZeroDefaults: []string{"example.com/v2.x/kinds.Policy"}, Tests: true}),
 		Entry("related enums", map[string]any{
 			"related-enums": []any{map[string]any{
 				"first": "example.com/a.Status", "second": "example.com/b.State", "reason": "different things",
 			}},
-		}, engine.Config{RelatedEnums: []engine.Pair{{First: "example.com/a.Status", Second: "example.com/b.State"}}}),
+		}, engine.Config{
+			RelatedEnums: []engine.Pair{{First: "example.com/a.Status", Second: "example.com/b.State"}}, Tests: true,
+		}),
 		Entry("ordered enums", map[string]any{
 			"ordered-enums": []any{map[string]any{"type": "example.com/log.Level", "reason": "severity rises"}},
-		}, engine.Config{OrderedEnums: []string{"example.com/log.Level"}}),
+		}, engine.Config{OrderedEnums: []string{"example.com/log.Level"}, Tests: true}),
+		Entry("ordered enums serving member-bound alone", map[string]any{
+			"disable":       []string{"ordered-comparison"},
+			"ordered-enums": []any{map[string]any{"type": "example.com/log.Level", "reason": "severity rises"}},
+		}, engine.Config{
+			OrderedEnums: []string{"example.com/log.Level"}, Tests: true,
+			Disabled: []engine.Rule{engine.RuleOrderedComparison},
+		}),
+		Entry("tests off", map[string]any{"tests": false}, engine.Config{}),
+		Entry("tests on, as when absent", map[string]any{"tests": true}, engine.Config{Tests: true}),
+		Entry("ordered instantiations", map[string]any{"ordered-instantiations": true},
+			engine.Config{Tests: true, OrderedInstantiations: true}),
+		Entry("ordered instantiations off, as when absent", map[string]any{"ordered-instantiations": false},
+			engine.Config{Tests: true}),
 		Entry("a rule disabled", map[string]any{"disable": []string{"restated", "numeric-verb"}},
-			engine.Config{Disabled: []engine.Rule{engine.RuleRestated, engine.RuleNumericVerb}}),
+			engine.Config{Tests: true, Disabled: []engine.Rule{engine.RuleRestated, engine.RuleNumericVerb}}),
 	)
 
 	It("rejects a rule selection that means nothing, naming the key", func() {
@@ -65,10 +80,19 @@ var _ = Describe("Plugin", func() {
 				"first": "example.com/a.A", "second": "example.com/b.B", "reason": "different things",
 			}},
 		}, engine.SettingRelatedEnums),
-		Entry("ordered-enums without ordered-comparison", map[string]any{
-			"disable":       []string{"ordered-comparison"},
+		Entry("ordered-enums without ordered-comparison and member-bound", map[string]any{
+			"disable":       []string{"ordered-comparison", "member-bound"},
 			"ordered-enums": []any{map[string]any{"type": "example.com/log.Level", "reason": "severity rises"}},
 		}, engine.SettingOrderedEnums),
+		Entry("tests without a use-site rule", map[string]any{
+			"default": "none",
+			"enable":  []string{"string-enum", "unnamed", "unreadable-name", "ambiguous-name", "zero-member", "restated"},
+			"tests":   false,
+		}, engine.SettingTests),
+		Entry("ordered-instantiations without ordered-comparison", map[string]any{
+			"disable":                []string{"ordered-comparison"},
+			"ordered-instantiations": true,
+		}, engine.SettingOrderedInstantiations),
 	)
 
 	It("loads the module under the configured build tags", func() {

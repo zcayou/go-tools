@@ -63,22 +63,38 @@ func (f *fileChecker) gomegaMatcher(call *ast.CallExpr, stack []ast.Node) {
 				"assert which one, by its type and fields")
 		}
 	case "MatchError":
-		if len(call.Args) == 0 {
-			return
-		}
-		site := f.matcherContext(call, stack)
-		switch {
-		case f.builtError(call.Args[0]):
-			if !site.negated {
-				f.textAsserted(call.Pos(), builtMessage, site.actual)
-			}
-		case f.positiveText(call.Args[0], site.negated):
-			f.textAsserted(call.Pos(), textMessage, site.actual)
+		if len(call.Args) > 0 {
+			f.matchError(call, stack)
 		}
 	case "HaveField":
 		if len(call.Args) == 2 {
 			f.haveField(call, stack)
 		}
+	case "BeTrue", "BeTrueBecause":
+		f.gomegaIdentity(call, stack, []bool{true})
+	case "BeFalse", "BeFalseBecause":
+		f.gomegaIdentity(call, stack, []bool{false})
+	case "Equal", "BeEquivalentTo", "BeIdenticalTo":
+		if len(call.Args) != 1 {
+			return
+		}
+		if held, ok := f.heldBy(call.Args[0]); ok {
+			f.gomegaIdentity(call, stack, held)
+		}
+	}
+}
+
+// matchError judges a MatchError given text, or an error the spec builds
+// with errors.New or fmt.Errorf, which it compares by text.
+func (f *fileChecker) matchError(call *ast.CallExpr, stack []ast.Node) {
+	site := f.matcherContext(call, stack)
+	switch {
+	case f.builtError(call.Args[0]):
+		if !site.negated {
+			f.textAsserted(call.Pos(), builtMessage, site.actual)
+		}
+	case f.positiveText(call.Args[0], site.negated):
+		f.textAsserted(call.Pos(), textMessage, site.actual)
 	}
 }
 

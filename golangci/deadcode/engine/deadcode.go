@@ -406,7 +406,7 @@ func Analyze(ctx context.Context, cfg Config) ([]Finding, error) {
 		findings = append(findings, newFinding(decl))
 	}
 	if !cfg.Tests {
-		return inertFields(cfg, findings, prog, pkgs, surface, reach)
+		return ruleFindings(cfg, findings, prog, pkgs, surface, declared, facts, reach)
 	}
 
 	// The masked view answers the same questions with test-origin evidence
@@ -438,21 +438,32 @@ func Analyze(ctx context.Context, cfg Config) ([]Finding, error) {
 	findings = append(findings, testOnlyFindings(full, masked, declared.packages)...)
 	// What the masked view reaches is what production roots reach, which is what
 	// a read has to sit in to be the module acting on a field.
-	return inertFields(cfg, findings, prog, pkgs, surface, production)
+	return ruleFindings(cfg, findings, prog, pkgs, surface, declared, facts, production)
 }
 
-// inertFields appends inert-field's findings when the configuration runs it.
-func inertFields(
-	cfg Config, findings []Finding, prog *program, pkgs []*packages.Package, surface *apiSurface, live reachability,
+// ruleFindings appends the findings of the rules the configuration runs,
+// in catalog order. live is what production roots reach.
+func ruleFindings(
+	cfg Config,
+	findings []Finding,
+	prog *program,
+	pkgs []*packages.Package,
+	surface *apiSurface,
+	declared *testFacing,
+	facts map[*packages.Package]fileFacts,
+	live reachability,
 ) ([]Finding, error) {
-	if !slices.Contains(cfg.Rules, RuleInertField) {
-		return findings, nil
+	if slices.Contains(cfg.Rules, RuleInertField) {
+		inert, err := newInertFields(prog, pkgs, surface, live, cfg.EchoFunctions)
+		if err != nil {
+			return nil, err
+		}
+		findings = append(findings, inert...)
 	}
-	inert, err := newInertFields(prog, pkgs, surface, live, cfg.EchoFunctions)
-	if err != nil {
-		return nil, err
+	if slices.Contains(cfg.Rules, RuleWriteOnlyField) {
+		findings = append(findings, newWriteOnlyFields(prog, pkgs, surface, declared.packages, facts)...)
 	}
-	return append(findings, inert...), nil
+	return findings, nil
 }
 
 // validate checks what the configuration asks for before anything loads,

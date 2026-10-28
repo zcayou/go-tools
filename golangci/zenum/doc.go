@@ -54,7 +54,11 @@
 //     sets are equal or one of which contains the other. That is one concept
 //     spelled twice, and the spellings drift apart the first time one
 //     is renamed. The finding sits on the later of the two
-//     in import-path-then-name order, and names the earlier.
+//     in import-path-then-name order, and names the earlier. A bridge restates
+//     an enum nobody outside its package sees, tokens or none: a switch
+//     or a map literal pairing each of its members, one to one, with a member
+//     of another enum is the mapping of a private copy onto the vocabulary
+//     it copies, and the finding sits on the copy, as Bridges says.
 //   - token-decision: a text decision on a rendered token — on v.String(),
 //     string(v) of a string enum, or fmt.Sprint(v) of an enum value. Also
 //     an enum value compared or switched against a constant that names no
@@ -104,7 +108,69 @@
 //     order, and silently admits whatever member is inserted between them. Only
 //     an ordering written on the enum's own type is judged. An ordering
 //     of a type parameter, and so a sort instantiated with the enum, decides no
-//     membership.
+//     membership, and is judged only under ordered-instantiations: then
+//     an instantiation outside the declaring package passing the enum to a type
+//     parameter whose constraint orders its values, every type in its type set
+//     being ordered as under cmp.Ordered, orders it as < does. That covers
+//     slices.Sort, slices.Sorted, slices.Min, slices.Max, slices.BinarySearch,
+//     cmp.Compare and cmp.Less, written or inferred, and the module's own
+//     generics constrained the same way; the finding sits on the instantiated
+//     name, and the generic's own body ordering its type parameter is not
+//     judged apart from it.
+//   - member-bound: an ordinal enum's values ordered, inside its declaring
+//     package or its tests, against a constant holding its highest member's
+//     value, by <, <=, > or >= or by min or max, unless ordered-enums lists it.
+//     k >= KindA && k <= KindC keeps compiling when KindD is appended,
+//     and silently leaves it out. A count sentinel is the bound that moves
+//     with the members, and a switch over them is the membership test that says
+//     which; a bound by any other member is not judged. A method of the enum's
+//     own type is judged, since Valid is where the range is usually written.
+//     Outside the package, ordered-comparison reports every ordering.
+//
+// # Test files
+//
+// The use-site rules — token-decision, forged-conversion, laundered-conversion,
+// numeric-verb, string-bypass, ordered-comparison and member-bound — judge
+// test files under the tests setting, which is on unless set to false. A spec
+// in another package writing Kind(index + 1), laundering a kind through int,
+// or printing one under %d leans on an encoding only the declaring package
+// owns, as production code there would.
+//
+// A package's own test files, in-package and external, are inside it, and every
+// other package's test files are outside. Each rule treats a test file
+// as it treats code in the same position, so kinds' own specs may convert into
+// and out of its enums and order them, and a spec in another package may not.
+// Inside and outside are decided by import path, a p_test package's being p's,
+// and an enum a test package meets is the plain package's enum, with its
+// members, tokens, exceptions and orderedness. A spec in another package
+// needing a value no member holds converts zero, while zero is no member.
+//
+// Only test files are judged as tests: a test variant's other files are its
+// package's, judged once there. The declaration rules, visibility, restated
+// and the exceptions those configure read the module's packages alone, so
+// a conversion in a test file never makes an enum visible, and a test file
+// writes no bridge. A printer a test file declares formats for the test files
+// reaching it, and an instantiation only a test makes is judged where
+// the generic body writes what it judges.
+//
+// # Bridges
+//
+// A bridge pairs the members of two enums, and is one of:
+//
+//   - a switch whose tag has enum type X, whose every case clause lists only
+//     members of X, and whose every such clause is one statement: a return
+//     giving exactly one member of an enum Y among its results,
+//     or an assignment of a member of Y to the variable every clause assigns.
+//     A default clause pairs nothing.
+//   - a map literal of type map[X]Y whose every key and value is a member.
+//
+// It is one to one when no member value of either enum is paired twice. One
+// that pairs every member value of an enum no reader outside its package meets,
+// holding at least two, restates it. Between two such enums the later
+// in import-path-then-name order is the copy reported, and a pair restated
+// by its tokens too is reported once. Two visible enums are each a vocabulary
+// readers meet, as a wire enum and a domain enum are, and a bridge between them
+// is no restatement: their tokens decide them.
 //
 // # Formatting
 //
@@ -233,30 +299,39 @@
 //	    - {first: example.com/a.Status, second: example.com/b.State, reason: ...}
 //	  ordered-enums:
 //	    - {type: example.com/log.Level, reason: severity rises with the ordinal}
+//	  ordered-instantiations: true
+//	  tests: false
 //	  build-tags: [integration]
 //
 // open-enums takes a type whose values come from outside the module, declaring
 // a few well-known constants, out of every rule. zero-defaults exempts an enum
 // whose zero member is its documented default from zero-member. related-enums
-// exempts a pair, in either order, whose tokens overlap because they classify
-// different things from restated. ordered-enums exempts an enum whose ordinals
-// are an order, as a severity's are, from ordered-comparison. build-tags
-// repeats golangci-lint's run.build-tags, which a plugin cannot read.
+// exempts from restated a pair, in either order, that classifies different
+// things, whether their tokens overlap or a bridge pairs them. ordered-enums
+// exempts an enum whose ordinals are an order, as a severity's are, from
+// ordered-comparison and member-bound: a comparison with its highest member
+// is a threshold. ordered-instantiations, false unless set, has
+// ordered-comparison judge instantiations, for a module that holds output
+// sorted by ordinal to follow declaration order: reordering the constants then
+// reorders every sorted list. tests repeats golangci-lint's run.tests,
+// and build-tags its run.build-tags, neither of which a plugin can read.
 //
 // Every rule is standard, and the default, enable and disable keys choose which
 // run, as every linter of this module chooses. zero-defaults serves
-// zero-member, related-enums serves restated, and ordered-enums serves
-// ordered-comparison; giving one while the rule it serves is off configures
-// nothing, and fails [New].
+// zero-member, related-enums serves restated, ordered-enums serves
+// ordered-comparison and member-bound, ordered-instantiations serves
+// ordered-comparison, and tests serves the use-site rules; giving one while
+// every rule it serves is off configures nothing, and fails [New].
 //
 // An entry with an empty reason, or naming a type other than
 // as import/path.Name, fails [New]. An entry that suppresses nothing fails
 // the run, because configuration matching nothing does not mean what it says:
 // a type that is no enum of the module, a zero-defaults type with no member
-// at zero, a related pair that does not restate, and an ordered-enums type
-// nothing outside its package orders. Whether a type is an enum takes
-// the module to answer, which golangci-lint constructs a plugin without, so
-// those wait for the analysis.
+// at zero, a related pair neither tokens nor a bridge restate,
+// and an ordered-enums type for which no running rule reports an ordering
+// the entry excuses, test files counted while they are judged. Whether a type
+// is an enum takes the module to answer, which golangci-lint constructs
+// a plugin without, so those wait for the analysis.
 //
 // A one-off exception is not a setting. golangci-lint applies the nolint
 // directive centrally, matched on the linter name, so a "nolint:zenum" comment
@@ -274,8 +349,10 @@
 // runs once per invocation over a typed load of the whole module, and each pass
 // reports the findings in the files it holds. The load is the one zerrors
 // reads, made once per process for a module root and build tag set, so enabling
-// both linters costs one load. The plugin asks golangci-lint for syntax only,
-// and never forces type checking on a consumer.
+// both linters costs one load. It always holds the module's tests, whether
+// or not this linter judges them, so that no setting changes what the other
+// linter is handed. The plugin asks golangci-lint for syntax only, and never
+// forces type checking on a consumer.
 //
 // golangci-lint caches issues per package, keyed on the package and its
 // imports, while a result here changes with the package's importers. So

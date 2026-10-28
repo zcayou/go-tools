@@ -95,6 +95,10 @@ func MatchRegexp(regexp string, args ...any) OmegaMatcher { return matcher{} }
 
 func Equal(expected any) OmegaMatcher { return matcher{} }
 
+func Panic() OmegaMatcher { return matcher{} }
+
+func PanicWith(expected any) OmegaMatcher { return matcher{} }
+
 func BeEquivalentTo(expected any) OmegaMatcher { return matcher{} }
 
 func HaveField(field string, expected any) OmegaMatcher { return matcher{} }
@@ -108,3 +112,13 @@ func EventuallyWithOffset(offset int, actual any, args ...any) AsyncAssertion { 
 func ConsistentlyWithOffset(offset int, actual any, args ...any) AsyncAssertion { return assertion{} }
 
 func WithTransform(transform any, matcher OmegaMatcher) OmegaMatcher { return matcher }
+
+func BeTrue() OmegaMatcher { return matcher{} }
+
+func BeFalse() OmegaMatcher { return matcher{} }
+
+func BeTrueBecause(format string, args ...any) OmegaMatcher { return matcher{} }
+
+func BeFalseBecause(format string, args ...any) OmegaMatcher { return matcher{} }
+
+func BeIdenticalTo(expected any) OmegaMatcher { return matcher{} }

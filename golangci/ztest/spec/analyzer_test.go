@@ -15,6 +15,8 @@ var _ = Describe("Analyzer", func() {
 		Expect(spec.RuleTextAssertion.String()).To(Equal("text-assertion"))
 		Expect(spec.RuleTokenAssertion.String()).To(Equal("token-assertion"))
 		Expect(spec.RuleBackgroundContext.String()).To(Equal("background-context"))
+		Expect(spec.RuleBooleanIdentity.String()).To(Equal("boolean-identity"))
+		Expect(spec.RuleUnpinnedRendering.String()).To(Equal("unpinned-rendering"))
 
 		var unset spec.Rule
 		Expect(unset.String()).To(Equal("Rule(0)"))
@@ -66,6 +68,22 @@ var _ = Describe("Analyzer", func() {
 
 	It("reports context.Background and context.TODO in a test, however imported, but not where no handle runs", func() {
 		runAnalysis(ztest.Settings{}, "backgroundcontext")
+	})
+
+	It("reports an identity boolean asserted as one where the framework has an assertion reporting the error", func() {
+		runAnalysis(ztest.Settings{}, "booleanidentity")
+	})
+
+	It("reports an error type with no test file to pin its rendering in, or none pinning it there", func() {
+		runAnalysis(ztest.Settings{Enable: []string{"unpinned-rendering"}},
+			"unpinned/missing", "unpinned/pinned", "unpinned/unpinned", "unpinned/command")
+	})
+
+	It("joins an in-package test's pins to the external test package's, which holds the finding", func() {
+		runAnalysis(ztest.Settings{
+			Enable:            []string{"unpinned-rendering"},
+			RenderingPatterns: []string{"<source>_test.go", "<source>_internal_test.go"},
+		}, "unpinned/split")
 	})
 
 	It("lets no file pin a rendering under an empty rendering-patterns", func() {

@@ -25,3 +25,13 @@ func New(t TestingT) *Assertions { return &Assertions{t: t} }
 func (a *Assertions) Error(err error, msgAndArgs ...any) {}
 
 func NotNil(t TestingT, object any, msgAndArgs ...any) {}
+
+func True(t TestingT, value bool, msgAndArgs ...any) {}
+
+func False(t TestingT, value bool, msgAndArgs ...any) {}
+
+func EqualError(t TestingT, theError error, errString string, msgAndArgs ...any) {}
+
+func Panics(t TestingT, f func(), msgAndArgs ...any) {}
+
+func Equalf(t TestingT, expected, actual any, msg string, args ...any) {}

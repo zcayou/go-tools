@@ -456,6 +456,31 @@
 // counted only in a function that reach holds. Its findings carry the rule
 // rather than a verdict, and follow every verdict's.
 //
+// # Write-only fields
+//
+// [RuleWriteOnlyField] reads live and dead code alike, so no reachability
+// enters it. Its subjects, writes and selections come from the syntax, keyed
+// by declaration position so a test variant's re-check of a file counts once,
+// and an instantiated type's field keyed as its origin's. Its other reads come
+// from the built program's instructions in module functions, a generic body
+// in each instantiation and a dependency's body in none: conversions
+// to an interface, equality, struct and unsafe.Pointer conversions, map keys,
+// and the type arguments of instantiated functions. The sink table
+// in internal/wholemodule says which arguments to an interface parameter
+// a standard-library callee only holds or compares, and a conversion whose
+// interface is otherwise only the receiver of interface method calls reads
+// nothing. Each read carries the audience of the code making it, which is its
+// file's, or its package's for an instruction of a package initializer SSA
+// positions nowhere, and counts toward a field whose audience is no narrower;
+// a test-facing package's code and fields have tests' audience. Reflection's
+// reach and equality memoize what they have read by type identity, so a named
+// struct's fields are read through the named type: two named structs declaring
+// the same fields have identical underlying types. Under a declared API,
+// the polarity walk inert-field derives its subjects from decides which struct
+// types are exposed, seeded besides with every exported type of the API
+// packages and descending the exported methods of each module type it crosses.
+// Its findings carry the rule, in position order, and follow inert-field's.
+//
 // # Load requirements
 //
 // The load must request syntax and type information for the whole transitive

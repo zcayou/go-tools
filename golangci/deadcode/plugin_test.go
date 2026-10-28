@@ -129,11 +129,13 @@ var _ = Describe("Plugin", func() {
 		func(settings map[string]any, expected []engine.Rule) {
 			Expect(engineConfig(settings).Rules).To(Equal(expected))
 		},
-		Entry("none by default", map[string]any{}, []engine.Rule(nil)),
+		Entry("the standard rules by default", map[string]any{}, []engine.Rule{engine.RuleWriteOnlyField}),
 		Entry("inert-field enabled", map[string]any{"api": []string{"./..."}, "enable": []string{"inert-field"}},
-			[]engine.Rule{engine.RuleInertField}),
+			[]engine.Rule{engine.RuleInertField, engine.RuleWriteOnlyField}),
+		Entry("write-only-field disabled", map[string]any{"disable": []string{"write-only-field"}}, []engine.Rule(nil)),
+		Entry("none", map[string]any{"default": "none"}, []engine.Rule(nil)),
 		Entry("every rule", map[string]any{"api": []string{"./..."}, "default": "all"},
-			[]engine.Rule{engine.RuleInertField}),
+			[]engine.Rule{engine.RuleInertField, engine.RuleWriteOnlyField}),
 	)
 
 	It("hands the engine the echo functions", func() {

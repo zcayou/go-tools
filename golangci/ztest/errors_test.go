@@ -123,9 +123,20 @@ var _ = Describe("ConfigError", func() {
 			"ztest: standalone configures only the layout rules, which the rule selection leaves off"),
 		Entry("rendering-patterns",
 			&ztest.ConfigError{Setting: ztest.SettingRenderingPatterns, Problem: ztest.ProblemServesNoRule},
-			"ztest: rendering-patterns configures only text-assertion and token-assertion, "+
+			"ztest: rendering-patterns configures only text-assertion, token-assertion and unpinned-rendering, "+
+				"which the rule selection leaves off"),
+		Entry("build-tags",
+			&ztest.ConfigError{Setting: ztest.SettingBuildTags, Problem: ztest.ProblemServesNoRule},
+			"ztest: build-tags configures only unidentified-error and unpinned-rendering, "+
 				"which the rule selection leaves off"),
 	)
+
+	It("renders an empty rendering-patterns under unpinned-rendering", func() {
+		_, err := ztest.New(map[string]any{"enable": []string{"unpinned-rendering"}, "rendering-patterns": []string{}})
+
+		Expect(err).To(MatchError("ztest: rendering-patterns: an empty list leaves no file to pin a rendering in, " +
+			"so unpinned-rendering would report every one; name a pattern or leave the key out"))
+	})
 
 	DescribeTable("renders what it can of a spec setting no value produced",
 		func(err *ztest.ConfigError, message string) {
@@ -156,10 +167,11 @@ var _ = Describe("ConfigError", func() {
 			ztest.ProblemPatternNamesNoSource.String(), ztest.ProblemEmptyAPI.String(),
 			ztest.ProblemNoModuleRoot.String(), ztest.ProblemUnresolvedAPIPattern.String(),
 			ztest.ProblemRuleSelection.String(), ztest.ProblemServesNoRule.String(),
+			ztest.ProblemNoRenderingPattern.String(),
 		}).To(Equal([]string{
 			"undecodable", "malformed-pattern", "no-kind-allowed", "no-adapter-name", "no-name",
 			"pattern-names-source", "pattern-names-no-source", "empty-api", "no-module-root",
-			"unresolved-api-pattern", "rule-selection", "serves-no-rule",
+			"unresolved-api-pattern", "rule-selection", "serves-no-rule", "no-rendering-pattern",
 		}))
 	})
 })

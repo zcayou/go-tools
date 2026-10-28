@@ -23,10 +23,11 @@ used, the adapter that calls RunSpecs sits in a file reserved for it, and it
 exists. A fixture lives in the one file consuming it, or in a helper file when
 more than one does.
 
-A spec asserts which error it got, not merely that one occurred, and an error's
-text and an enum's tokens are each asserted once, in the test file pinning the
-rendering of the source that declares them. A test takes the context its
-framework hands it rather than context.Background.`
+A spec asserts which error it got, not merely that one occurred, through the
+assertion that reports the error rather than a boolean, and an error's text and
+an enum's tokens are each asserted once, in the test file pinning the rendering
+of the source that declares them. A test takes the context its framework hands
+it rather than context.Background.`
 
 // NewAnalyzer builds the analyzer that runs every enabled rule under settings.
 // It fails with a [*ConfigError] on settings no run could satisfy, and reads

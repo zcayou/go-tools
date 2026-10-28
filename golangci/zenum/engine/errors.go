@@ -2,7 +2,8 @@ package engine
 
 import "fmt"
 
-// Setting is the configuration key an exception entry is listed under.
+// Setting is a configuration key: one an exception entry is listed under,
+// or one that widens what the rules judge.
 type Setting int
 
 const (
@@ -16,6 +17,11 @@ const (
 	SettingRelatedEnums
 	// SettingOrderedEnums lists enums whose ordinals are an order.
 	SettingOrderedEnums
+	// SettingTests says whether the use-site rules judge test files.
+	SettingTests
+	// SettingOrderedInstantiations says whether ordered-comparison judges
+	// an instantiation whose type parameter orders the enum.
+	SettingOrderedInstantiations
 )
 
 func (s Setting) String() string {
@@ -28,6 +34,10 @@ func (s Setting) String() string {
 		return "related-enums"
 	case SettingOrderedEnums:
 		return "ordered-enums"
+	case SettingTests:
+		return "tests"
+	case SettingOrderedInstantiations:
+		return "ordered-instantiations"
 	default:
 		return fmt.Sprintf("Setting(%d)", int(s))
 	}
@@ -47,8 +57,9 @@ const (
 	// FaultNotRestated is a related-enums pair whose tokens do not overlap the way
 	// restated reports.
 	FaultNotRestated
-	// FaultNotOrdered is an ordered-enums entry for an enum nothing outside its
-	// package orders.
+	// FaultNotOrdered is an ordered-enums entry for an enum no judged ordering
+	// needs it for: nothing outside its package orders it, and nothing inside
+	// bounds it by its highest member.
 	FaultNotOrdered
 )
 
@@ -96,7 +107,8 @@ func (e *ExceptionError) Error() string {
 	case FaultNotRestated:
 		return fmt.Sprintf("%s: %s and %s do not restate each other's tokens", e.Setting, e.Type, e.Related)
 	case FaultNotOrdered:
-		return fmt.Sprintf("%s: nothing outside %s's package orders it", e.Setting, e.Type)
+		return fmt.Sprintf("%s: nothing outside %s's package orders it, "+
+			"and nothing inside bounds it by its highest member", e.Setting, e.Type)
 	default:
 		return fmt.Sprintf("%s: %s suppresses nothing", e.Setting, e.Type)
 	}

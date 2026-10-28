@@ -10,8 +10,9 @@
 // [Analyze] takes a module another caller loaded, rather than loading one
 // itself, so that zerrors and this engine read one load when both run: module
 // packages from source with type information, dependencies from export data,
-// and no tests. Nothing here needs a dependency's bodies. A dependency's
-// enum is no rule's subject, and what the module does with one
+// and the module's test packages held apart, with an SSA program of their own
+// built only when asked for. Nothing here needs a dependency's bodies.
+// A dependency's enum is no rule's subject, and what the module does with one
 // is in the module's own source.
 //
 // # The enums
@@ -50,10 +51,14 @@
 // for as one constant. A conversion of a constant folds away in SSA, so
 // Kind(99) leaves nothing behind to report, and neither does the untyped 99
 // in Take(99), which the type checker records with the enum's type. A format
-// string's verbs pair with the operands written at the call. Each is read off
-// the syntax tree with its type information, in every non-test file of every
-// module package, one declaration at a time, so that a method of an enum's own
-// type is known as one.
+// string's verbs pair with the operands written at the call. A bridge pairs
+// members by the constants its cases list and its clauses give,
+// and an instantiation passing an enum to an ordering type parameter is what
+// the type checker records at the name instantiated. Each is read off
+// the syntax tree with its type information, in every file of every module
+// package and, under [Config.Tests], every test file of its test packages, one
+// declaration at a time, so that a method of an enum's own type is known
+// as one.
 //
 // The functions read are those the module's syntax declares, its package
 // initializers, which hold package-level initialization, the methods of every
@@ -66,6 +71,31 @@
 // on demand under the program's own locks, which is safe while other linters
 // read the same load. A method with type parameters of its own has no method
 // value, and is read through the instantiations its callers make.
+//
+// # Test files
+//
+// Under [Config.Tests] the use-site rules read a second corpus: the test files
+// of the module's test packages, in [wholemodule.Module.TestProgram], which
+// builds the module's packages and their tests together. Its functions
+// are those the test files declare, the test packages' initializers,
+// and the closures and instantiations those reach. A variant's functions in its
+// package's own files are the package's, read once in the first corpus,
+// and a finding both corpora reach is recorded once.
+//
+// A test package type checks on its own, so the objects a test file meets
+// are not the module packages': a variant redeclares its package's,
+// and a package compiled against a variant comes from export data with copies
+// of its own. Each maps to the module package's object by import path and its
+// path within the package, as golang.org/x/tools/go/types/objectpath writes
+// one, which is how an enum, its String and its members, and a printer, met
+// in a test file are the ones the module declares. Whether code is inside
+// an enum's package is decided by import path too, a test package's being
+// the path of the package under test.
+//
+// Printers are inferred once per corpus. The test corpus infers from every
+// module file and its own, so a printer a test file declares, or one a test's
+// implementation makes of a module interface's method, formats for the test
+// files alone.
 //
 // # Visibility
 //
@@ -84,9 +114,8 @@
 //
 // A conversion to an interface inside a method of an enum's own type does not
 // make that enum visible, and neither does one whose interface is handed only
-// to the opaque sinks a table in visibility.go lists: standard library
-// functions that key, store, sort or describe the type of a value and never
-// render it.
+// to the standard-library sinks wholemodule lists, as an argument they key,
+// store, sort or describe the type of, and never render.
 //
 // # Format strings
 //

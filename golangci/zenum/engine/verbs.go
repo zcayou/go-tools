@@ -30,12 +30,12 @@ const naming = "vsq"
 // judged there: its String printing a value no member holds as a number,
 // as in "Kind(%d)", is the one place the ordinal is what should print, and %v
 // would call that String again.
-func (a *analysis) formatting(info *types.Info, call *ast.CallExpr, own *enumType) {
+func (c *corpus) formatting(info *types.Info, call *ast.CallExpr, own *enumType) {
 	callee := typeutil.Callee(info, call)
 	if callee == nil || call.Ellipsis.IsValid() {
 		return
 	}
-	p, ok := a.printerOf(callee)
+	p, ok := c.printerOf(callee)
 	if !ok {
 		return
 	}
@@ -43,13 +43,13 @@ func (a *analysis) formatting(info *types.Info, call *ast.CallExpr, own *enumTyp
 	var generic []formatted
 	for _, operand := range operands {
 		t := info.TypeOf(operand.expr)
-		a.judgeFormatted(operand, t, own)
+		c.a.judgeFormatted(operand, t, own)
 		if holdsTypeParam(t) {
 			generic = append(generic, operand)
 		}
 	}
 	if len(generic) > 0 {
-		a.genericFormats[call.Lparen] = genericFormat{operands: generic, own: own}
+		c.a.genericFormats[call.Lparen] = genericFormat{operands: generic, own: own}
 	}
 }
 

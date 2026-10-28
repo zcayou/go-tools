@@ -55,3 +55,16 @@ func libPackage(module *wholemodule.Module) *packages.Package {
 	Fail("no package " + path)
 	return nil
 }
+
+// testPackage returns the plain fixture's test package with that import path.
+func testPackage(module *wholemodule.Module, path string) *packages.Package {
+	GinkgoHelper()
+
+	for _, pkg := range module.Tests {
+		if pkg.PkgPath == path {
+			return pkg
+		}
+	}
+	Fail("no test package " + path)
+	return nil
+}

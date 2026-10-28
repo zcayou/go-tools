@@ -24,5 +24,6 @@ var _ = Describe("Rule", func() {
 		Entry(nil, engine.RuleStringBypass, "string-bypass"),
 		Entry(nil, engine.RuleLaunderedConversion, "laundered-conversion"),
 		Entry(nil, engine.RuleOrderedComparison, "ordered-comparison"),
+		Entry(nil, engine.RuleMemberBound, "member-bound"),
 	)
 })

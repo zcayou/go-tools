@@ -44,6 +44,11 @@ var _ = Describe("Pattern", func() {
 		Expect(ok).To(BeFalse())
 	})
 
+	It("names the file it gives a source, and none for a glob", func() {
+		Expect(mustCompile("spec_<source>_test.go").Name("store")).To(Equal("spec_store_test.go"))
+		Expect(mustCompile("*_test.go").Name("store")).To(BeEmpty())
+	})
+
 	It("lists a set's patterns as they were configured", func() {
 		set, err := filepattern.NewSet([]string{"<source>_test.go", "helpers_test.go"})
 

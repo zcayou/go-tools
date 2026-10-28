@@ -28,11 +28,12 @@ var _ = Describe("ExceptionError", func() {
 				Type: "example.com/m.A", Related: "example.com/m.B",
 			},
 			"related-enums: example.com/m.A and example.com/m.B do not restate each other's tokens"),
-		Entry("an ordered enum nothing outside its package orders",
+		Entry("an ordered enum no judged ordering needs",
 			&engine.ExceptionError{
 				Setting: engine.SettingOrderedEnums, Fault: engine.FaultNotOrdered, Type: "example.com/m.Level",
 			},
-			"ordered-enums: nothing outside example.com/m.Level's package orders it"),
+			"ordered-enums: nothing outside example.com/m.Level's package orders it, "+
+				"and nothing inside bounds it by its highest member"),
 		Entry("no setting or fault at all",
 			&engine.ExceptionError{Type: "example.com/m.Kind"},
 			"Setting(0): example.com/m.Kind suppresses nothing"),
@@ -46,6 +47,8 @@ var _ = Describe("ExceptionError", func() {
 		Entry(nil, engine.SettingZeroDefaults, "zero-defaults"),
 		Entry(nil, engine.SettingRelatedEnums, "related-enums"),
 		Entry(nil, engine.SettingOrderedEnums, "ordered-enums"),
+		Entry(nil, engine.SettingTests, "tests"),
+		Entry(nil, engine.SettingOrderedInstantiations, "ordered-instantiations"),
 	)
 
 	DescribeTable("names each fault",

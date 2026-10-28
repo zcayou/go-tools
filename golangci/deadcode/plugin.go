@@ -21,7 +21,7 @@ const Name = "deadcode"
 type Settings struct {
 	// Selection chooses which rules beside the verdicts run, through the default,
 	// enable and disable keys. The verdicts are the linter itself and are not
-	// selectable. inert-field, the one such rule, is opt-in.
+	// selectable. write-only-field is standard and inert-field opt-in.
 	ruleset.Selection
 
 	// Patterns are the package patterns to analyze, resolved against the module
@@ -241,7 +241,7 @@ func configFrom(s Settings) (engine.Config, error) {
 // catalog is the rules beside the verdicts a selection chooses from.
 // A selection enabling none of them still leaves the verdicts.
 var catalog = ruleset.Catalog[engine.Rule]{
-	Rules:  []engine.Rule{engine.RuleInertField},
+	Rules:  []engine.Rule{engine.RuleInertField, engine.RuleWriteOnlyField},
 	OptIn:  []engine.Rule{engine.RuleInertField},
 	Beside: true,
 }

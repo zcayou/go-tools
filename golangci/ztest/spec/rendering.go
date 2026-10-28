@@ -21,6 +21,13 @@ type directory struct {
 	path    string
 	sources filepattern.Sources
 	read    bool
+
+	// tests are the names of the directory's test files, in name order.
+	tests []string
+
+	// candidates are what has been read of each test file a rendering pattern
+	// names for a source declaring an error type, by name.
+	candidates map[string]candidate
 }
 
 func (d *directory) load() error {
@@ -33,7 +40,11 @@ func (d *directory) load() error {
 	}
 	for _, entry := range entries {
 		name := entry.Name()
-		if !entry.IsDir() && strings.HasSuffix(name, ".go") && !strings.HasSuffix(name, testSuffix) {
+		switch {
+		case entry.IsDir() || !strings.HasSuffix(name, ".go"):
+		case strings.HasSuffix(name, testSuffix):
+			d.tests = append(d.tests, name)
+		default:
 			d.sources = append(d.sources, name)
 		}
 	}

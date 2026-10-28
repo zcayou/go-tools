@@ -116,10 +116,12 @@ var _ = Describe("Analyzer", func() {
 			newAnalyzer(ztest.Settings{Disable: layoutRuleNames()}), "polarity")
 	})
 
-	It("declares the spec rules' fact only while a spec rule runs", func() {
+	It("declares the spec rules' facts only while a spec rule runs", func() {
 		Expect(newAnalyzer(ztest.Settings{}).FactTypes).NotTo(BeEmpty())
 		Expect(newAnalyzer(ztest.Settings{
-			Disable: []string{"unidentified-error", "text-assertion", "token-assertion", "background-context"},
+			Disable: []string{
+				"unidentified-error", "text-assertion", "token-assertion", "background-context", "boolean-identity",
+			},
 		}).FactTypes).To(BeEmpty())
 	})
 })

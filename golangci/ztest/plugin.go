@@ -25,14 +25,14 @@ const testSuffix = "_test.go"
 //
 // Decoding rejects unknown fields, so a misspelled key fails the run rather
 // than being silently ignored. The zero value is the default configuration:
-// every rule runs; beside a source, black-box test files only, each named
-// for the source it exercises; in a directory holding no source, standalone
-// files named for what they exercise; every API package's specs owe
-// an identified error; and a test file named for a source pins the renderings
-// that source declares.
+// every rule but unpinned-rendering runs; beside a source, black-box test files
+// only, each named for the source it exercises; in a directory holding no
+// source, standalone files named for what they exercise; every API package's
+// specs owe an identified error; and a test file named for a source pins
+// the renderings that source declares.
 type Settings struct {
 	// Selection chooses which rules run, through the default, enable and disable
-	// keys. Every rule is standard.
+	// keys. Every rule but unpinned-rendering is standard.
 	ruleset.Selection
 
 	// Whitebox configures test files that declare the package under test and so
@@ -60,10 +60,11 @@ type Settings struct {
 	// RenderingPatterns are the names of the test files that pin the rendering
 	// of the source they are named for, each holding <source> once. Absent
 	// means [DefaultRenderingPatterns]; an explicit empty list means no file
-	// pins a rendering.
+	// pins a rendering, which unpinned-rendering cannot run under.
 	RenderingPatterns []string `json:"rendering-patterns"`
 
-	// BuildTags are extra build tags, under which the api patterns resolve.
+	// BuildTags are extra build tags, under which the api patterns resolve
+	// and a test file's build constraints decide whether it can pin a rendering.
 	// golangci-lint's run.build-tags cannot be read from a plugin, so it has
 	// to be repeated here.
 	BuildTags []string `json:"build-tags"`
@@ -206,23 +207,16 @@ func Resolve(s Settings) (Config, error) {
 	if s.API != nil && len(s.API) == 0 {
 		return Config{}, &ConfigError{Setting: SettingAPI, Problem: ProblemEmptyAPI}
 	}
-	renderings, err := patternsOr(s.RenderingPatterns, DefaultRenderingPatterns())
+	renderings, err := s.renderings(rules)
 	if err != nil {
-		return Config{}, &ConfigError{Setting: SettingRenderingPatterns, Problem: ProblemMalformedPattern, cause: err}
-	}
-	for _, p := range renderings {
-		if !p.NamesSource() {
-			return Config{}, &ConfigError{
-				Setting: SettingRenderingPatterns, Problem: ProblemPatternNamesNoSource, Pattern: p.String(),
-			}
-		}
+		return Config{}, err
 	}
 
 	config := Config{
 		Layout: layout.Config{
 			Whitebox: whitebox, Blackbox: blackbox, Standalone: standalone, Adapters: adapters,
 		},
-		Spec: spec.Config{Renderings: renderings},
+		Spec: spec.Config{Renderings: renderings, BuildTags: s.BuildTags},
 	}
 	if s.API != nil {
 		config.Spec.API = &apiScope{patterns: s.API, buildTags: s.BuildTags}
@@ -238,8 +232,34 @@ func Resolve(s Settings) (Config, error) {
 	return config, nil
 }
 
+// renderings compiles the rendering patterns, each of which has to hold
+// <source>, and refuses none while unpinned-rendering requires a file to pin
+// every rendering in.
+func (s Settings) renderings(rules ruleset.Enabled[fmt.Stringer]) (filepattern.Set, error) {
+	renderings, err := patternsOr(s.RenderingPatterns, DefaultRenderingPatterns())
+	if err != nil {
+		return nil, &ConfigError{Setting: SettingRenderingPatterns, Problem: ProblemMalformedPattern, cause: err}
+	}
+	for _, p := range renderings {
+		if !p.NamesSource() {
+			return nil, &ConfigError{
+				Setting: SettingRenderingPatterns, Problem: ProblemPatternNamesNoSource, Pattern: p.String(),
+			}
+		}
+	}
+	if len(renderings) == 0 && rules.Has(spec.RuleUnpinnedRendering) {
+		return nil, &ConfigError{Setting: SettingRenderingPatterns, Problem: ProblemNoRenderingPattern}
+	}
+	return renderings, nil
+}
+
 // catalog is the rules a selection chooses from, both halves' together.
-var catalog = ruleset.Catalog[fmt.Stringer]{Rules: slices.Concat(layoutRules, specRules)}
+// unpinned-rendering is opt-in: a rendering no spec pins is missing coverage,
+// not a defect.
+var catalog = ruleset.Catalog[fmt.Stringer]{
+	Rules: slices.Concat(layoutRules, specRules),
+	OptIn: []fmt.Stringer{spec.RuleUnpinnedRendering},
+}
 
 // layoutRules and specRules are each half's rules.
 var (
@@ -260,6 +280,8 @@ var (
 		spec.RuleTextAssertion,
 		spec.RuleTokenAssertion,
 		spec.RuleBackgroundContext,
+		spec.RuleBooleanIdentity,
+		spec.RuleUnpinnedRendering,
 	}
 )
 
@@ -296,10 +318,12 @@ func (e *ConfigError) serves() []fmt.Stringer {
 	switch e.Setting {
 	case SettingPatterns, SettingHelperPatterns, SettingAdapterPatterns:
 		return layoutRules
-	case SettingAPI, SettingBuildTags:
+	case SettingAPI:
 		return []fmt.Stringer{spec.RuleUnidentifiedError}
+	case SettingBuildTags:
+		return []fmt.Stringer{spec.RuleUnidentifiedError, spec.RuleUnpinnedRendering}
 	case SettingRenderingPatterns:
-		return []fmt.Stringer{spec.RuleTextAssertion, spec.RuleTokenAssertion}
+		return []fmt.Stringer{spec.RuleTextAssertion, spec.RuleTokenAssertion, spec.RuleUnpinnedRendering}
 	default:
 		return nil
 	}

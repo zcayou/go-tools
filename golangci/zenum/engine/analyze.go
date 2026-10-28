@@ -8,6 +8,7 @@ import (
 	"slices"
 
 	"golang.org/x/tools/go/packages"
+	"golang.org/x/tools/go/types/objectpath"
 
 	"github.com/zcayou/go-tools/golangci/internal/enum"
 	"github.com/zcayou/go-tools/golangci/internal/wholemodule"
@@ -29,8 +30,17 @@ type Config struct {
 	RelatedEnums []Pair
 
 	// OrderedEnums are enums whose ordinals are an order, which ordered-comparison
-	// then leaves alone.
+	// and member-bound then leave alone.
 	OrderedEnums []string
+
+	// Tests has the use-site rules judge test files too: each package's in-package
+	// and external tests.
+	Tests bool
+
+	// OrderedInstantiations has ordered-comparison judge an instantiation
+	// passing an enum to a type parameter whose constraint orders its values,
+	// as a sort's does.
+	OrderedInstantiations bool
 
 	// Disabled are rules that report nothing. Every rule runs by default.
 	Disabled []Rule
@@ -70,19 +80,28 @@ func (f Finding) Message() string {
 // An exception in cfg that suppresses nothing fails the analysis
 // with an [*ExceptionError], or several joined, and no findings.
 func Analyze(module *wholemodule.Module, cfg Config) ([]Finding, error) {
-	a := newAnalysis(module)
-	a.disabled = cfg.Disabled
+	a := newAnalysis(module, cfg)
 	stale := a.exceptions(cfg)
-	functions := a.functions()
-	a.inferPrinters(functions)
-	a.see(functions)
+	plain := a.plainCorpus()
+	plain.inferPrinters()
+	a.see(plain.functions)
 	a.declarations()
 	stale = append(stale, a.restatements(cfg.RelatedEnums)...)
-	a.renderings(functions)
-	a.syntax()
+	corpora := []*corpus{plain}
+	if cfg.Tests {
+		tests := a.testCorpus(plain)
+		tests.inferPrinters()
+		corpora = append(corpora, tests)
+	}
+	for _, c := range corpora {
+		a.renderings(c.functions)
+		c.syntax()
+	}
 	stale = append(stale, a.unordered(cfg)...)
-	a.instantiated(functions)
-	a.instantiatedFormats(functions)
+	for _, c := range corpora {
+		a.instantiated(c.functions)
+		a.instantiatedFormats(c.functions)
+	}
 
 	if len(stale) == 1 {
 		return nil, stale[0]
@@ -105,12 +124,21 @@ func Analyze(module *wholemodule.Module, cfg Config) ([]Finding, error) {
 type analysis struct {
 	module *wholemodule.Module
 
+	// pkgs are the module's packages in import-path order.
+	pkgs []*packages.Package
+
 	// enums are the enums the rules judge, in import-path-then-name order.
 	enums []*enumType
 
 	// byType and byName index enums by their type and by their String method.
 	byType map[*types.Named]*enumType
 	byName map[*types.Func]*enumType
+
+	// plain holds the module's packages by import path, and canonicals what
+	// [analysis.canonical] has mapped, through paths.
+	plain      map[string]*packages.Package
+	canonicals map[types.Object]types.Object
+	paths      *objectpath.Encoder
 
 	// carriage memoizes what each type carries.
 	carriage *carriage
@@ -120,17 +148,17 @@ type analysis struct {
 	// instruction says it was written.
 	generic map[token.Pos]genericConversion
 
-	// modulePaths are the import paths of the module's packages.
+	// modulePaths are the import paths of the module's packages and of their
+	// test packages.
 	modulePaths map[string]bool
-
-	// printers are the module's functions, methods, interface methods, variables
-	// and fields that format their operands as fmt does.
-	printers map[types.Object]printer
 
 	// genericFormats holds each printer's call in a generic body formatting
 	// a type parameter's value, by the position of its opening parenthesis,
 	// which is where an SSA call instruction says it was written.
 	genericFormats map[token.Pos]genericFormat
+
+	// orderedInstantiations is [Config.OrderedInstantiations].
+	orderedInstantiations bool
 
 	disabled []Rule
 	findings []Finding
@@ -139,21 +167,30 @@ type analysis struct {
 
 // newAnalysis finds the module's enums, before any exception takes one
 // out.
-func newAnalysis(module *wholemodule.Module) *analysis {
+func newAnalysis(module *wholemodule.Module, cfg Config) *analysis {
 	a := &analysis{
-		module:         module,
-		modulePaths:    map[string]bool{},
-		byType:         map[*types.Named]*enumType{},
-		byName:         map[*types.Func]*enumType{},
-		carriage:       newCarriage(),
-		generic:        map[token.Pos]genericConversion{},
-		genericFormats: map[token.Pos]genericFormat{},
-		reported:       map[Finding]bool{},
+		module:                module,
+		modulePaths:           map[string]bool{},
+		byType:                map[*types.Named]*enumType{},
+		byName:                map[*types.Func]*enumType{},
+		plain:                 map[string]*packages.Package{},
+		canonicals:            map[types.Object]types.Object{},
+		paths:                 new(objectpath.Encoder),
+		carriage:              newCarriage(),
+		generic:               map[token.Pos]genericConversion{},
+		genericFormats:        map[token.Pos]genericFormat{},
+		orderedInstantiations: cfg.OrderedInstantiations,
+		disabled:              cfg.Disabled,
+		reported:              map[Finding]bool{},
 	}
-	pkgs := slices.Clone(module.Packages)
-	slices.SortFunc(pkgs, func(x, y *packages.Package) int { return cmp.Compare(x.PkgPath, y.PkgPath) })
-	for _, pkg := range pkgs {
+	a.pkgs = slices.Clone(module.Packages)
+	slices.SortFunc(a.pkgs, func(x, y *packages.Package) int { return cmp.Compare(x.PkgPath, y.PkgPath) })
+	for _, pkg := range module.Tests {
 		a.modulePaths[pkg.PkgPath] = true
+	}
+	for _, pkg := range a.pkgs {
+		a.modulePaths[pkg.PkgPath] = true
+		a.plain[pkg.PkgPath] = pkg
 		for _, declared := range enum.Declared(enum.Package{Fset: pkg.Fset, Files: pkg.Syntax, Types: pkg.Types, Info: pkg.TypesInfo}) {
 			if !declared.Ordinal() && !declared.Textual() {
 				continue
@@ -169,6 +206,11 @@ func newAnalysis(module *wholemodule.Module) *analysis {
 	return a
 }
 
+// enabled reports whether rule reports what it finds.
+func (a *analysis) enabled(rule Rule) bool {
+	return !slices.Contains(a.disabled, rule)
+}
+
 // report records a finding once. A generic body is read once as written
 // and once per instantiation, and each reading finds the same thing.
 func (a *analysis) report(pos token.Pos, rule Rule, v *enumType, detail string) {
@@ -178,7 +220,7 @@ func (a *analysis) report(pos token.Pos, rule Rule, v *enumType, detail string) 
 		Enum:   v.qualified,
 		Detail: detail,
 	}
-	if !finding.Pos.IsValid() || a.reported[finding] || slices.Contains(a.disabled, rule) {
+	if !finding.Pos.IsValid() || a.reported[finding] || !a.enabled(rule) {
 		return
 	}
 	a.reported[finding] = true

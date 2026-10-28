@@ -37,16 +37,31 @@ const (
 	handed   polarity = false
 )
 
+// exposure is the API's polarity walk: every type it crosses, in each polarity
+// it crosses it.
+type exposure struct {
+	module map[string]bool
+	walked typeutil.Map // types.Type → map[polarity]bool
+
+	// authored, when set, is handed each exported module struct type the walk
+	// reaches in authored polarity.
+	authored func(owner string, st *types.Struct, setter string)
+
+	// called also walks the exported methods of every module named type the walk
+	// crosses that is not an interface, as a caller calls them.
+	called bool
+}
+
 // inert is one inert-field run: the subjects the API's polarity reaches, then
 // the reads live module code makes of them.
 type inert struct {
-	fset   *token.FileSet
-	module map[string]bool
-	live   reachability
+	exposure
+
+	fset *token.FileSet
+	live reachability
 
 	subjects map[string]*subjectField
 	order    []string
-	walked   typeutil.Map // types.Type → map[polarity]bool
 
 	// echoes are the echo-functions entries, by name, and what each reads.
 	echoes map[string]map[string]bool
@@ -63,24 +78,18 @@ func newInertFields(
 	prog *program, pkgs []*packages.Package, surface *apiSurface, live reachability, echoes []string,
 ) ([]Finding, error) {
 	in := &inert{
-		fset:     prog.Fset,
 		module:   analyzedPackages(pkgs),
+		fset:     prog.Fset,
 		live:     live,
 		subjects: map[string]*subjectField{},
 		echoes:   map[string]map[string]bool{},
 		read:     map[string]bool{},
 	}
+	in.authored = in.subject
 	for _, name := range echoes {
 		in.echoes[name] = map[string]bool{}
 	}
-	for _, root := range apiRoots(pkgs, surface) {
-		for _, t := range root.takes {
-			in.walk(t, authored, root.setter)
-		}
-		for _, t := range root.gives {
-			in.walk(t, handed, root.setter)
-		}
-	}
+	in.roots(pkgs, surface)
 
 	declared := in.reads(pkgs)
 	in.outflows(prog)
@@ -153,7 +162,7 @@ func funcRoot(name string, sig *types.Signature) apiRoot {
 func apiRoots(pkgs []*packages.Package, surface *apiSurface) []apiRoot {
 	var roots []apiRoot
 	for _, pkg := range pkgs {
-		if pkg.Types == nil || testVariant(pkg) || !surface.packages[pkg.PkgPath] || !exportedRootPackage(pkg.PkgPath) {
+		if !apiPackage(pkg, surface) {
 			continue
 		}
 		scope := pkg.Types.Scope()
@@ -189,14 +198,32 @@ func apiRoots(pkgs []*packages.Package, surface *apiSurface) []apiRoot {
 	return roots
 }
 
+// roots walks what every root of the API takes from its caller and gives back.
+func (e *exposure) roots(pkgs []*packages.Package, surface *apiSurface) {
+	for _, root := range apiRoots(pkgs, surface) {
+		for _, t := range root.takes {
+			e.walk(t, authored, root.setter)
+		}
+		for _, t := range root.gives {
+			e.walk(t, handed, root.setter)
+		}
+	}
+}
+
+// apiPackage reports whether a loaded package is one of the API's own, rather
+// than a test variant of one.
+func apiPackage(pkg *packages.Package, surface *apiSurface) bool {
+	return pkg.Types != nil && !testVariant(pkg) && surface.packages[pkg.PkgPath] && exportedRootPackage(pkg.PkgPath)
+}
+
 // signature walks a signature's parameters in one polarity and its results
 // in another.
-func (in *inert) signature(sig *types.Signature, params, results polarity, setter string) {
+func (e *exposure) signature(sig *types.Signature, params, results polarity, setter string) {
 	for param := range sig.Params().Variables() {
-		in.walk(param.Type(), params, setter)
+		e.walk(param.Type(), params, setter)
 	}
 	for result := range sig.Results().Variables() {
-		in.walk(result.Type(), results, setter)
+		e.walk(result.Type(), results, setter)
 	}
 }
 
@@ -206,73 +233,88 @@ func (in *inert) signature(sig *types.Signature, params, results polarity, sette
 // and embedded fields of every struct; and flips polarity across a func type's
 // parameters and an interface method's, which the other side supplies. It stays
 // inside the module.
-func (in *inert) walk(t types.Type, p polarity, setter string) {
+func (e *exposure) walk(t types.Type, p polarity, setter string) {
 	t = types.Unalias(t)
-	walked, _ := in.walked.At(t).(map[polarity]bool)
+	walked, _ := e.walked.At(t).(map[polarity]bool)
 	if walked[p] {
 		return
 	}
 	if walked == nil {
 		walked = map[polarity]bool{}
-		in.walked.Set(t, walked)
+		e.walked.Set(t, walked)
 	}
 	walked[p] = true
 
 	switch t := t.(type) {
 	case *types.Pointer:
-		in.walk(t.Elem(), p, setter)
+		e.walk(t.Elem(), p, setter)
 	case *types.Slice:
-		in.walk(t.Elem(), p, setter)
+		e.walk(t.Elem(), p, setter)
 	case *types.Array:
-		in.walk(t.Elem(), p, setter)
+		e.walk(t.Elem(), p, setter)
 	case *types.Map:
-		in.walk(t.Key(), p, setter)
-		in.walk(t.Elem(), p, setter)
+		e.walk(t.Key(), p, setter)
+		e.walk(t.Elem(), p, setter)
 	case *types.Chan:
-		in.walk(t.Elem(), p, setter)
+		e.walk(t.Elem(), p, setter)
 	case *types.Signature:
-		in.signature(t, !p, p, setter)
+		e.signature(t, !p, p, setter)
 	case *types.Interface:
-		in.methods(t, p, setter)
+		e.methods(t, p, setter)
 	case *types.Struct:
-		in.fields(t, p, setter)
+		e.fields(t, p, setter)
 	case *types.Named:
-		for arg := range t.TypeArgs().Types() {
-			in.walk(arg, p, setter)
-		}
-		if t.Obj().Pkg() == nil || !in.module[t.Obj().Pkg().Path()] {
-			return
-		}
-		switch u := t.Underlying().(type) {
-		case *types.Struct:
-			if p == authored && t.Obj().Exported() {
-				in.subject(t.Obj().Name(), u, setter)
+		e.named(t, p, setter)
+	}
+}
+
+// named walks a named type's type arguments and, for a module type, what
+// it is: a struct's fields, an interface's methods, or another type's
+// underlying type, and under called the signatures of its exported methods.
+// An exported struct met in authored polarity is a subject.
+func (e *exposure) named(t *types.Named, p polarity, setter string) {
+	for arg := range t.TypeArgs().Types() {
+		e.walk(arg, p, setter)
+	}
+	if t.Obj().Pkg() == nil || !e.module[t.Obj().Pkg().Path()] {
+		return
+	}
+	if e.called && !types.IsInterface(t) {
+		for selection := range types.NewMethodSet(types.NewPointer(t)).Methods() {
+			if method, ok := selection.Obj().(*types.Func); ok && method.Exported() {
+				e.signature(method.Signature(), authored, handed, setter)
 			}
-			in.fields(u, p, setter)
-		case *types.Interface:
-			in.methods(u, p, setter)
-		default:
-			in.walk(u, p, setter)
 		}
+	}
+	switch u := t.Underlying().(type) {
+	case *types.Struct:
+		if p == authored && t.Obj().Exported() && e.authored != nil {
+			e.authored(t.Obj().Name(), u, setter)
+		}
+		e.fields(u, p, setter)
+	case *types.Interface:
+		e.methods(u, p, setter)
+	default:
+		e.walk(u, p, setter)
 	}
 }
 
 // methods walks an interface's exported methods: the other side of the API
 // implements what this side calls.
-func (in *inert) methods(iface *types.Interface, p polarity, setter string) {
+func (e *exposure) methods(iface *types.Interface, p polarity, setter string) {
 	for method := range iface.Methods() {
 		if method.Exported() {
-			in.signature(method.Signature(), !p, p, setter)
+			e.signature(method.Signature(), !p, p, setter)
 		}
 	}
 }
 
 // fields walks a struct's exported fields, and its embedded ones, whose
 // exported fields are promoted.
-func (in *inert) fields(st *types.Struct, p polarity, setter string) {
+func (e *exposure) fields(st *types.Struct, p polarity, setter string) {
 	for field := range st.Fields() {
 		if field.Exported() || field.Embedded() {
-			in.walk(field.Type(), p, setter)
+			e.walk(field.Type(), p, setter)
 		}
 	}
 }
@@ -598,8 +640,8 @@ func (in *inert) implementable(t types.Type) bool {
 
 // supplied reports whether the polarity walk crosses t in authored polarity:
 // the caller supplies a value of it.
-func (in *inert) supplied(t types.Type) bool {
-	walked, _ := in.walked.At(types.Unalias(t)).(map[polarity]bool)
+func (e *exposure) supplied(t types.Type) bool {
+	walked, _ := e.walked.At(types.Unalias(t)).(map[polarity]bool)
 	return walked[authored]
 }
 
@@ -622,17 +664,30 @@ func (in *inert) beneath(t types.Type, r reader, seen *typeutil.Map) {
 		in.beneath(t.Key(), r, seen)
 		in.beneath(t.Elem(), r, seen)
 	case *types.Named:
-		if t.Obj().Pkg() != nil && in.module[t.Obj().Pkg().Path()] {
+		if t.Obj().Pkg() == nil || !in.module[t.Obj().Pkg().Path()] {
+			return
+		}
+		// Identical struct types are one entry of seen, though each named struct
+		// declares fields of its own.
+		if st, ok := t.Underlying().(*types.Struct); ok {
+			in.beneathFields(st, r, seen)
+		} else {
 			in.beneath(t.Underlying(), r, seen)
 		}
 	case *types.Struct:
-		for field := range t.Fields() {
-			if field.Exported() {
-				in.record(field, r)
-			}
-			if field.Exported() || field.Embedded() {
-				in.beneath(field.Type(), r, seen)
-			}
+		in.beneathFields(t, r, seen)
+	}
+}
+
+// beneathFields records a read of a struct's exported fields, and of what
+// reflection reaches beneath them and its embedded ones.
+func (in *inert) beneathFields(st *types.Struct, r reader, seen *typeutil.Map) {
+	for field := range st.Fields() {
+		if field.Exported() {
+			in.record(field, r)
+		}
+		if field.Exported() || field.Embedded() {
+			in.beneath(field.Type(), r, seen)
 		}
 	}
 }

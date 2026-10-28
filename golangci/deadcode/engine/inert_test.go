@@ -1,9 +1,6 @@
 package engine_test
 
 import (
-	"fmt"
-	"path/filepath"
-
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
@@ -24,9 +21,11 @@ var _ = Describe("inert-field", func() {
 		// reached through an exported field, one promoted from a struct embedded
 		// by value, and an interface method's result the caller authors. A field read
 		// in a closure, through a field, or in the whole embedded value promoting it,
-		// a deprecated one, the fields of a printed struct, and what a handed struct
-		// holds, the caller reading it, are not reported.
-		Expect(inertFields(ctx, inert("inertfield/net.Options.Fingerprint"))).To(Equal([]string{
+		// a deprecated one, the fields of a printed struct, each of two sharing one
+		// shape, and what a handed struct holds, the caller reading it, are not
+		// reported.
+		found := ruleFindings(ctx, inert("inertfield/net.Options.Fingerprint"), engine.RuleInertField)
+		Expect(found).To(Equal([]string{
 			"net/net.go:12:2: inert-field: Options.Retries",
 			"net/net.go:13:2: inert-field: Options.Label",
 			"net/net.go:14:2: inert-field: Options.Debug",
@@ -40,7 +39,8 @@ var _ = Describe("inert-field", func() {
 	})
 
 	It("counts what an unlisted function reads", func(ctx SpecContext) {
-		Expect(inertFields(ctx, inert())).NotTo(ContainElement("net/net.go:21:2: inert-field: Options.Key"))
+		Expect(ruleFindings(ctx, inert(), engine.RuleInertField)).
+			NotTo(ContainElement("net/net.go:21:2: inert-field: Options.Key"))
 	})
 
 	It("says who sets the field", func(ctx SpecContext) {
@@ -62,7 +62,7 @@ var _ = Describe("inert-field", func() {
 			// interface no API crosses, overwritten after an adapter returns it,
 			// or only stored and returned, a field is still reported, as is one
 			// set through an exported variable and never read.
-			Expect(inertFields(ctx, handoff)).To(ConsistOf(
+			Expect(ruleFindings(ctx, handoff, engine.RuleInertField)).To(ConsistOf(
 				"jobs/events.go:47:2: inert-field: Options.Retries",
 				"jobs/kept.go:6:2: inert-field: Probe.Port",
 				"jobs/kept.go:23:2: inert-field: Verdict.Phase",
@@ -105,23 +105,3 @@ var _ = Describe("inert-field", func() {
 		Entry("one reading no field another read would not", "inertfield/net.Register", engine.ProblemChangesNothing),
 	)
 })
-
-// inertFields runs the engine over the inertfield fixture and renders
-// inert-field's findings.
-func inertFields(ctx SpecContext, cfg engine.Config) []string {
-	GinkgoHelper()
-
-	found, err := engine.Analyze(ctx, cfg)
-	Expect(err).NotTo(HaveOccurred())
-	var reported []string
-	for _, finding := range found {
-		if finding.Rule != engine.RuleInertField {
-			continue
-		}
-		rel, err := filepath.Rel(cfg.Dir, finding.Pos.Filename)
-		Expect(err).NotTo(HaveOccurred())
-		reported = append(reported, fmt.Sprintf("%s:%d:%d: %s: %s",
-			rel, finding.Pos.Line, finding.Pos.Column, finding.Category(), finding.Name))
-	}
-	return reported
-}

@@ -45,11 +45,62 @@
 // enable deadcode. Beside them sit rules, which judge something further
 // and which the default, enable and disable keys choose among, as every linter
 // of this module chooses. A selection enabling none still leaves the verdicts.
-// There is one rule, and it is opt-in:
+// There are two rules:
 //
-//   - inert-field: an exported field of a struct the module takes from its
-//     caller that no live module code reads. Such a field type-checks
+//   - write-only-field, standard: a field of a named struct type that module
+//     code writes and nothing reads. It is state with no effect.
+//   - inert-field, opt-in: an exported field of a struct the module takes from
+//     its caller that no live module code reads. Such a field type-checks
 //     and round-trips, the caller sets it, and nothing happens.
+//
+// write-only-field judges every non-blank, non-embedded field of a named struct
+// type declared outside a generated file, test files included while tests
+// is on, and a generic type's field once for all its instantiations. A field
+// of an anonymous struct type is not judged: identical unnamed struct types
+// assign to each other, so no one declaration owns the field. A field
+// with a write and no read is reported, and one nothing selects at all is left
+// to unused. With api declared, the exported fields of a struct type a consumer
+// can hold are not judged, since the consumer may read them. It holds
+// the exported types of the api packages, which it names, and what the API's
+// signatures and variables reach in either direction, as the polarity walk
+// below crosses them, together with what lies beneath all of those: exported
+// and embedded fields, element, key and pointer types, and the exported
+// methods' signatures of each such type. Without api the module is judged
+// as a program, and an exported field is a subject like any other.
+//
+// A write is the target of an assignment, op-assignment, inc/dec or range =,
+// writing beneath a struct-valued field writing it too; x.f = append(x.f, …)
+// on the same selection; a composite-literal element; and a sync/atomic write,
+// which is Store, Swap, Add, And or Or called on an atomic-typed field,
+// or the package function of one of those names given &x.f, whose result
+// is discarded: Swap, Add, And and Or return what the field held, so code using
+// that result reads it. Load and CompareAndSwap read. Every other selection
+// is a read: &x.f handed on, a method called on the field, an element written
+// through it, since x.m[k] = v reads a map that may be shared, and a read
+// inside String, Format or an echo function, since what is printed is read.
+//
+// Equality over a type holding a struct by value reads every field it holds
+// by value: == and !=, a switch tag, a map key type, and a type argument
+// a comparable constraint admits. Converting the struct to another struct
+// type, or a pointer to it to unsafe.Pointer, reads the same fields. Converting
+// a value to an interface reads every field reflection reaches beneath it,
+// exported or not, through pointers, slices, arrays, maps and channels
+// and never a func type, since fmt prints unexported fields
+// and reflect.DeepEqual compares them; reflect.TypeFor reaches beneath its
+// type argument alike. A value whose interface only ever has its methods called
+// or feeds standard-library sinks is the exception: a method called reads what
+// its body reads, a sink that holds it, as context.WithValue holds its value,
+// reads nothing, and one that compares it, as a key, reads what equality
+// does. Evidence is read from the module's own code, live and dead alike,
+// a generic body in each instantiation. A dependency's body is not read, so
+// what crosses into one is judged at the call, which is why a struct only
+// an atomic.Pointer holds is reported.
+//
+// Evidence counts toward a field only from code written for no wider
+// an audience: production code toward a production field, and tests too toward
+// a field a test file or a test-facing package declares, a test-facing package
+// being written for tests. A production field that only tests or test-facing
+// code read is reported as read only by tests.
 //
 // Which structs a caller hands in is derived by polarity from the api patterns,
 // which inert-field requires. The roots are the exported functions
@@ -90,8 +141,9 @@
 // a Deprecated: paragraph is not judged, since keeping a field that does
 // nothing, so callers still compile, is what deprecation means.
 //
-// It is opt-in because it judges an API's design rather than reachability,
-// and a field reserved for a later release is the module's decision.
+// inert-field is opt-in because it judges an API's design rather than
+// reachability, and a field reserved for a later release is the module's
+// decision.
 //
 // # What the plugin cannot do
 //
