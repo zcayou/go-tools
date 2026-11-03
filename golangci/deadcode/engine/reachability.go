@@ -15,8 +15,11 @@ import (
 )
 
 // ErrNoRoots is returned when the loaded packages offer nothing to root at, so
-// reachability is undefined rather than empty.
-var ErrNoRoots = errors.New("no main packages and no exported declarations among loaded packages")
+// reachability is undefined rather than empty: no main package, and no exported
+// declaration the fallback roots take, which internal and test packages never
+// contribute and test-facing ones do not while test-only liveness is measured.
+var ErrNoRoots = errors.New("no main packages, and no exported declarations outside internal, test " +
+	"and test-facing packages, among the loaded packages")
 
 // reachability is what Rapid Type Analysis established about the program:
 // the functions it found reachable at all, and the subset reachable through

@@ -13,7 +13,9 @@ import (
 // sentinel as structured, and leaves missing-base off.
 type Config struct {
 	// API are package patterns, resolved against the module root, naming the API
-	// packages. nil means ./... Each pattern has to match an API package.
+	// packages. nil means every API package of the module, of which a module
+	// holding only a command has none. Each pattern given has to match an API
+	// package.
 	API []string
 
 	// Trusted are import paths, each optionally ending in /..., whose errors

@@ -16,18 +16,20 @@ import (
 // main and hold no internal path element. Go already stops any other module
 // importing an internal package, so no pattern makes one API, and a package
 // outside the module, from the standard library or a dependency, is no part
-// of its API either. nil patterns mean ./...
+// of its API either. nil patterns take every API package the module has,
+// and a module with none, such as one holding only a command, resolves to none.
 //
-// Each pattern is resolved on its own, so that one matching no API package
-// of the module fails with a [*PatternError] naming it rather than leaving
-// the configuration covering less than it says.
+// Each pattern given is resolved on its own, so that one matching no API
+// package of the module fails with a [*PatternError] naming it rather than
+// leaving the configuration covering less than it says.
 func ResolveAPI(root string, buildTags, patterns []string) (map[string]bool, error) {
 	return resolve(root, buildTags, patterns, Public)
 }
 
 // ResolvePackages returns the import paths of the packages of the module rooted
 // at root that patterns match, main and internal ones included. nil patterns
-// mean ./... Each pattern has to match a package of the module, or it fails
+// take every package of the module, of which there may be none. Each pattern
+// given has to match a package of the module, or it fails
 // with a [*PatternError] naming it.
 func ResolvePackages(root string, buildTags, patterns []string) (map[string]bool, error) {
 	return resolve(root, buildTags, patterns, func(string, string) bool { return true })
@@ -35,9 +37,11 @@ func ResolvePackages(root string, buildTags, patterns []string) (map[string]bool
 
 // resolve returns the module packages patterns match that admit takes, by path
 // and name. A pattern matching only packages admit refuses fails with them
-// as its Excluded.
+// as its Excluded. nil patterns stand for ./..., which nobody wrote, so its
+// taking nothing describes the module rather than a pattern gone wrong.
 func resolve(root string, buildTags, patterns []string, admit func(path, name string) bool) (map[string]bool, error) {
-	if patterns == nil {
+	implied := patterns == nil
+	if implied {
 		patterns = []string{"./..."}
 	}
 	config := &packages.Config{Mode: packages.NeedName | packages.NeedModule, Dir: root}
@@ -74,7 +78,7 @@ func resolve(root string, buildTags, patterns []string, admit func(path, name st
 				found = true
 			}
 		}
-		if !found {
+		if !found && !implied {
 			slices.Sort(excluded)
 			slices.Sort(foreign)
 			return nil, &PatternError{Pattern: pattern, Excluded: excluded, Foreign: foreign}

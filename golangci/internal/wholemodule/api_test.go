@@ -19,6 +19,22 @@ var _ = Describe("ResolveAPI", func() {
 		Expect(api).To(Equal(map[string]bool{"example.com/plain/lib": true}))
 	})
 
+	It("takes nothing, without failing, when no pattern is given and the module has no API package", func() {
+		api, err := wholemodule.ResolveAPI(fixtureDir("command"), nil, nil)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(api).To(BeEmpty())
+	})
+
+	It("rejects ./... written out when the module has no API package", func() {
+		_, err := wholemodule.ResolveAPI(fixtureDir("command"), nil, []string{"./..."})
+
+		Expect(err).To(MatchError(&wholemodule.PatternError{
+			Pattern:  "./...",
+			Excluded: []string{"example.com/command", "example.com/command/internal/run"},
+		}))
+	})
+
 	It("narrows to the packages the patterns match", func() {
 		api, err := wholemodule.ResolveAPI(fixtureDir("plain"), nil, []string{"./lib"})
 

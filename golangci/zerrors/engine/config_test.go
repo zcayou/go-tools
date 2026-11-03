@@ -102,6 +102,27 @@ var _ = Describe("Configuration the module cannot satisfy", func() {
 		})
 	})
 
+	Describe("a module with no API package, such as a lone command", func() {
+		It("still judges text decisions when api is omitted", func() {
+			Expect(analyze("command", engine.Config{}, engine.RuleTextDecision)).To(ConsistOf(
+				"internal/run/run.go:11: text-decision: decides on an error's text; branch on its type or fields instead",
+			))
+		})
+
+		It("judges no return as leaving the API when api is omitted", func() {
+			Expect(analyze("command", engine.Config{}, engine.RuleUnstructuredReturn)).To(BeEmpty())
+		})
+
+		It("fails when api names ./... outright", func() {
+			_, err := run("command", engine.Config{API: []string{"./..."}})
+
+			Expect(err).To(BeAssignableToTypeOf(&engine.ConfigError{}))
+			Expect(err).To(HaveField("Setting", engine.SettingAPI))
+			Expect(err).To(HaveField("Problem", engine.ProblemMatchesNothing))
+			Expect(err).To(HaveField("Value", "./..."))
+		})
+	})
+
 	It("fails on an api pattern matching only packages outside the module, through what resolving it said", func() {
 		_, err := run("judged", engine.Config{API: []string{"fmt"}})
 

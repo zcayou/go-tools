@@ -27,8 +27,9 @@ type Settings struct {
 	// API are package patterns, resolved against the module root, narrowing
 	// the API packages: those whose exported functions and types are judged,
 	// and whose exported error types and sentinels a caller can name. Omit the key
-	// for ./...; an explicitly empty list is rejected. A main package or one under
-	// an internal element is never API, whatever pattern matches it.
+	// for every API package the module has, if any; an explicitly empty list
+	// is rejected. A main package or one under an internal element is never API,
+	// whatever pattern matches it.
 	API []string `json:"api"`
 
 	// Trusted are import paths, each optionally ending in /..., whose errors

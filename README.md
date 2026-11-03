@@ -421,7 +421,7 @@ linters:
       zerrors:
         type: module
         settings:
-          api: ['./pkg/...']        # absent means ./...; main and internal packages are never API
+          api: ['./pkg/...']        # absent means every API package, if any; main and internal packages are never API
           trusted: ['example.com/framework/...']  # packages whose errors count as structured
           protocols:                # interface methods whose implementations may return raw errors
             - {method: example.com/framework/lane.Acquirer.Acquire, reason: the lane classifies them}
@@ -450,10 +450,11 @@ patterns match `internal` and `main` packages too.
 
 A `trusted`, `protocols` or `base` entry that matches nothing, and an `api` or
 `base-packages` pattern matching no package it could mean, fail the run rather
-than meaning nothing. `api` serves `unstructured-return`, `literal-field` and
-`rendered-field`; `trusted`, `protocols` and `sentinels` serve
-`unstructured-return`; `base` serves it and `missing-base`; `base-packages`
-serves `missing-base`.
+than meaning nothing. Omitting `api` writes no pattern: a module without an API
+package, such as a lone command, runs with nothing for the rules `api` serves to
+judge. `api` serves `unstructured-return`, `literal-field` and `rendered-field`;
+`trusted`, `protocols` and `sentinels` serve `unstructured-return`; `base`
+serves it and `missing-base`; `base-packages` serves `missing-base`.
 
 ### zenum
 

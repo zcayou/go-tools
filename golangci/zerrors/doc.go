@@ -248,11 +248,13 @@
 //
 // The plugin cannot read golangci-lint's run configuration, so build tags
 // are a setting of this linter's. An absent key and an empty list differ:
-// omitting api judges every package as API, and writing api: [] names no
-// package and is rejected; the same holds of base-packages, which is rejected
-// too when base is not set, since it would scope a rule that is off.
-// A protocols entry carries a reason, which has to be written out: such
-// an entry is a property of the interface rather than a one-off suppression.
+// omitting api judges every API package the module has, and a module with none,
+// such as a lone command, leaves the rules api serves nothing to judge, while
+// writing api: [] names no package and is rejected; the same holds
+// of base-packages, which is rejected too when base is not set, since it would
+// scope a rule that is off. A protocols entry carries a reason, which has
+// to be written out: such an entry is a property of the interface rather than
+// a one-off suppression.
 //
 // Every rule is standard, and the default, enable and disable keys choose which
 // run, as every linter of this module chooses. api serves unstructured-return,
