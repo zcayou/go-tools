@@ -6,6 +6,7 @@ require (
 	github.com/golangci/plugin-module-register v0.1.2
 	github.com/onsi/ginkgo/v2 v2.32.2
 	github.com/onsi/gomega v1.43.0
+	golang.org/x/exp/typeparams v0.0.0-20260811152304-ee035b5b010f
 	golang.org/x/tools v0.50.0
 )
 

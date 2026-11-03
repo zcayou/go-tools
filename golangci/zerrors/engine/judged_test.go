@@ -67,6 +67,15 @@ var _ = Describe("The judged functions", func() {
 		))
 	})
 
+	It("reads the fields of a type parameter's literal from its constraint's core type", func() {
+		// Keyed and positional literals of a type-parameter type hold the fields
+		// of the struct every type the constraint admits shares, and the error
+		// Run returns is followed through the field its instance fills.
+		Expect(analyze("structconstraint", engine.Config{}, engine.RuleUnstructuredReturn)).To(ConsistOf(
+			"structconstraint.go:37: unstructured-return: Run can return an unstructured error: errors.New in fill",
+		))
+	})
+
 	It("judges the methods of a type an exported alias of an API package names", func() {
 		Expect(analyze("aliases", engine.Config{}, engine.RuleUnstructuredReturn)).To(ContainElement(
 			"internal/store/store.go:16: unstructured-return: Store.Get can return an unstructured error: errors.New",

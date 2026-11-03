@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"golang.org/x/exp/typeparams"
 	"golang.org/x/tools/go/ssa"
 	"golang.org/x/tools/go/types/typeutil"
 )
@@ -480,8 +481,30 @@ func fieldOf(t types.Type, i int) *types.Var {
 	if pointer, ok := t.Underlying().(*types.Pointer); ok {
 		t = pointer.Elem()
 	}
-	st, _ := t.Underlying().(*types.Struct)
-	return st.Field(i).Origin()
+	return heldStruct(t).Field(i).Origin()
+}
+
+// heldStruct returns the struct a value of type t holds: its underlying type,
+// or for a type parameter its core type, the underlying type every type its
+// constraint admits shares. A composite literal of a type parameter holds
+// the fields of that struct, and SSA builds a field instruction on a type
+// parameter only when there is one.
+func heldStruct(t types.Type) *types.Struct {
+	u := t.Underlying()
+	if tparam, ok := types.Unalias(t).(*types.TypeParam); ok {
+		terms, err := typeparams.NormalTerms(tparam)
+		if err != nil || len(terms) == 0 {
+			return nil
+		}
+		u = terms[0].Type().Underlying()
+		for _, term := range terms[1:] {
+			if !types.Identical(u, term.Type().Underlying()) {
+				return nil
+			}
+		}
+	}
+	st, _ := u.(*types.Struct)
+	return st
 }
 
 // loadedField returns the field v was loaded from, or nil.
